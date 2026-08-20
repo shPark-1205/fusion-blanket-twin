@@ -1,0 +1,8 @@
+numpy
+h5py
+vtk
+pyvista
+trame
+trame-vtk
+trame-vuetify
+cadquery

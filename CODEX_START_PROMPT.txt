@@ -1,0 +1,20 @@
+Read `AGENTS.md`, `docs/PROJECT_CONTEXT.md`, and `docs/ROADMAP.md` first.
+
+We are continuing the Fusion Blanket Twin project from a previous ChatGPT design session.
+
+Inspect the repository before changing anything. Continue the `feature/mcnp-cad-viewer` implementation toward v0.1.0.
+
+Preserve the coordinate and unit conventions exactly:
+- CAD/project frame: mm
+- MCNP frame: cm
+- MCNP coordinates must be multiplied by 10 for visualization in the CAD frame
+- +Z = tokamak +R
+- Z = 0 = plasma-facing armor surface
+
+Do not force the MCNP voxel mesh to conform to CAD material boundaries. Preserve raw voxel values for probe operations.
+
+Start by reporting:
+1. the current repository structure,
+2. what v0.1 functionality already exists,
+3. the next concrete code changes you recommend,
+then implement the highest-priority missing item.

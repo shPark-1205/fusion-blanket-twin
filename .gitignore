@@ -1,0 +1,17 @@
+.venv/
+.idea/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.res
+*.h5
+*.hdf5
+*.vtkhdf
+*.cgns
+runtpe*
+results/
+generated/
+viewer_*.log
+chrome_netlog*.json
+chrome_dump*.html
+tmp_chrome_profile*/
