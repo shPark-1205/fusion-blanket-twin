@@ -17,6 +17,11 @@ from fusion_blanket_twin.config.settings import (  # noqa: E402
     SAMPLE_CAD_PATH,
     SAMPLE_MCNP_PATH,
 )
+from fusion_blanket_twin.geometry.doe_mapping import CurrentDOEGeometryMapping  # noqa: E402
+from fusion_blanket_twin.visualization.component_display import (  # noqa: E402
+    DEFAULT_COMPONENT_GROUP_COLORS,
+    ClippingConfig,
+)
 from fusion_blanket_twin.surrogate.service import ScalarPredictionService  # noqa: E402
 from fusion_blanket_twin.visualization.mcnp import (  # noqa: E402
     create_z_heating_slice,
@@ -27,6 +32,15 @@ from fusion_blanket_twin.visualization.scene import build_blanket_viewer_scene  
 
 LOCAL_MCNP_INPUT_DIR = ROOT / "data" / "local" / "mcnp_inputs"
 LOCAL_SCALAR_WORKBOOK = ROOT / "data" / "local" / "fusion_blanket_twin_100case_results_parsed.xlsx"
+INITIAL_PZ_206_CM = 5.6
+INITIAL_CZ_301_RADIUS_CM = 4.8
+COMPONENT_GROUP_STATE_KEYS: dict[str, str] = {
+    "Armor": "armor",
+    "Breeder": "breeder",
+    "Multiplier": "multiplier",
+    "Structure": "structure",
+    "Coolant": "coolant",
+}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -36,6 +50,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("--host", default="localhost")
     parser.add_argument("--show-debug-edges", action="store_true")
+    parser.add_argument(
+        "--geometry-source",
+        choices=("parametric_csg", "step"),
+        default="parametric_csg",
+        help="Geometry source for CAD/component rendering.",
+    )
     parser.add_argument(
         "--ui-stage",
         choices=("basic", "primitive", "heating", "full"),
@@ -51,6 +71,7 @@ def main(argv: list[str] | None = None) -> int:
         port=args.port,
         show_debug_edges=args.show_debug_edges,
         ui_stage=args.ui_stage,
+        geometry_source=args.geometry_source,
     )
     return 0
 
@@ -62,6 +83,7 @@ def launch_trame_viewer(
     port: int,
     show_debug_edges: bool = False,
     ui_stage: str = "full",
+    geometry_source: str = "parametric_csg",
 ) -> None:
     try:
         from trame.app import get_server
@@ -77,6 +99,11 @@ def launch_trame_viewer(
     server = get_server(client_type="vue3")
     state, controller = server.state, server.controller
     scalar_service = _try_build_scalar_prediction_service()
+    geometry_mapping = _geometry_mapping_for_scalar_service(scalar_service)
+    initial_primitive_csg = geometry_mapping.from_current_controls(
+        INITIAL_PZ_206_CM,
+        INITIAL_CZ_301_RADIUS_CM,
+    )
 
     scene = None
     zmin = zmax = None
@@ -91,12 +118,15 @@ def launch_trame_viewer(
             cad_path=cad_path,
             mcnp_path=mcnp_path,
             show_debug_edges=show_debug_edges,
+            primitive_csg=initial_primitive_csg,
+            geometry_source=geometry_source,
         )
         zmin, zmax = scene.z_bounds_mm
         state.slice_z = scene.slice_z_mm
         state.cad_opacity = scene.cad_opacity
 
     state.ui_stage = ui_stage
+    state.geometry_source = geometry_source
     state.case_metadata = _case_metadata_lines()
     _initialize_scalar_prediction_state(state, scalar_service)
 
@@ -108,6 +138,7 @@ def launch_trame_viewer(
         state.cad_bounds_text = "not loaded"
         state.cad_body_count_text = "not loaded"
         state.cad_triangle_count_text = "not loaded"
+    _initialize_component_display_state(state, scene)
 
     if scene is not None and hasattr(scene, "mcnp"):
         state.mcnp_bounds_text = _format_bounds(scene.mcnp.summary.bounds_mm)
@@ -131,6 +162,30 @@ def launch_trame_viewer(
             scene.update_cad_opacity(float(cad_opacity))
             controller.view_update()
 
+        _bind_component_display_handlers(state, controller, scene)
+
+        @state.change("cad_clipping_enabled")
+        @state.change("cad_clipping_axis")
+        @state.change("cad_clip_position")
+        @state.change("cad_clipping_invert")
+        def _on_cad_clipping_change(
+            cad_clipping_enabled,
+            cad_clipping_axis,
+            cad_clip_position,
+            cad_clipping_invert,
+            **_kwargs,
+        ):
+            _refresh_clipping_axis_bounds(state, scene, preserve_position=True)
+            scene.set_cad_clipping(
+                ClippingConfig(
+                    enabled=bool(cad_clipping_enabled),
+                    axis=str(cad_clipping_axis),
+                    position_mm=float(getattr(state, "cad_clip_position", cad_clip_position)),
+                    invert=bool(cad_clipping_invert),
+                )
+            )
+            controller.view_update()
+
     if scalar_service is not None:
         @state.change("scalar_pz_206")
         @state.change("scalar_cz_301_radius")
@@ -141,6 +196,16 @@ def launch_trame_viewer(
                 float(scalar_pz_206),
                 float(scalar_cz_301_radius),
             )
+            if scene is not None and ui_stage == "full":
+                scene.update_parametric_geometry(
+                    geometry_mapping.from_current_controls(
+                        float(scalar_pz_206),
+                        float(scalar_cz_301_radius),
+                    )
+                )
+                state.cad_bounds_text = _format_bounds(scene.component_bounds_mm)
+                _refresh_clipping_axis_bounds(state, scene, preserve_position=True)
+                controller.view_update()
 
     def _button_action() -> None:
         if scene is not None:
@@ -148,6 +213,16 @@ def launch_trame_viewer(
             controller.view_update()
 
     controller.button_action = _button_action
+
+    def _reset_cad_clipping() -> None:
+        if scene is not None:
+            scene.reset_cad_clipping()
+            _refresh_clipping_axis_bounds(state, scene, preserve_position=False)
+            state.cad_clipping_enabled = False
+            state.cad_clip_position = state.cad_clip_default
+            controller.view_update()
+
+    controller.reset_cad_clipping = _reset_cad_clipping
 
     with SinglePageWithDrawerLayout(server) as layout:
         layout.title.set_text("Fusion Blanket Twin")
@@ -181,12 +256,63 @@ def launch_trame_viewer(
                     label="CAD opacity",
                     hide_details=True,
                 )
+                vuetify.VCardText("Geometry source: {{ geometry_source }}")
                 vuetify.VCardText(f"CAD solids: {state.cad_body_count_text}")
                 vuetify.VCardText(f"CAD triangles: {state.cad_triangle_count_text}")
                 vuetify.VCardText(f"CAD bounds: {state.cad_bounds_text}")
                 vuetify.VCardText(f"MCNP bounds: {state.mcnp_bounds_text}")
                 vuetify.VCardText(f"Heating range: {state.field_range_text}")
                 vuetify.VCardText("3D field: loaded MCNP simulation")
+                vuetify.VDivider(classes="my-2")
+                vuetify.VCardText("Component Colors")
+                for group, key in COMPONENT_GROUP_STATE_KEYS.items():
+                    vuetify.VTextField(
+                        v_model=(f"component_color_{key}", DEFAULT_COMPONENT_GROUP_COLORS[group]),
+                        label=f"{group} color",
+                        type="color",
+                        density="compact",
+                        hide_details=True,
+                    )
+                vuetify.VDivider(classes="my-2")
+                vuetify.VCardText("Component Visibility")
+                for group, key in COMPONENT_GROUP_STATE_KEYS.items():
+                    vuetify.VCheckbox(
+                        v_model=(f"component_visible_{key}", True),
+                        label=group,
+                        density="compact",
+                        hide_details=True,
+                    )
+                vuetify.VDivider(classes="my-2")
+                vuetify.VCardText("CAD Clipping")
+                vuetify.VCheckbox(
+                    v_model=("cad_clipping_enabled", state.cad_clipping_enabled),
+                    label="Enable clipping",
+                    density="compact",
+                    hide_details=True,
+                )
+                vuetify.VSelect(
+                    v_model=("cad_clipping_axis", state.cad_clipping_axis),
+                    items=("cad_clipping_axis_options", state.cad_clipping_axis_options),
+                    label="Axis",
+                    density="compact",
+                    hide_details=True,
+                )
+                vuetify.VSlider(
+                    v_model=("cad_clip_position", state.cad_clip_position),
+                    min=("cad_clip_min", state.cad_clip_min),
+                    max=("cad_clip_max", state.cad_clip_max),
+                    step=1.0,
+                    label="Clip position mm",
+                    thumb_label=True,
+                    hide_details=True,
+                )
+                vuetify.VCheckbox(
+                    v_model=("cad_clipping_invert", state.cad_clipping_invert),
+                    label="Invert",
+                    density="compact",
+                    hide_details=True,
+                )
+                vuetify.VBtn("Reset clipping", click=controller.reset_cad_clipping)
                 vuetify.VDivider(classes="my-2")
                 vuetify.VCardText("Case")
                 for line in state.case_metadata:
@@ -222,8 +348,8 @@ def launch_trame_viewer(
                     vuetify.VCardText("Multiplying: {{ scalar_multiplying_text }}")
                     vuetify.VCardText("{{ scalar_warning_text }}")
                     vuetify.VCardText(
-                        "Scalar KPIs follow the selected design parameters. "
-                        "The 3D heating field remains the currently loaded MCNP simulation "
+                        "Geometry and scalar KPIs follow the selected design. "
+                        "The 3D Total Heating field remains the currently loaded MCNP simulation "
                         "until field-surrogate integration is available."
                     )
         with layout.content:
@@ -339,6 +465,14 @@ def _try_build_scalar_prediction_service() -> ScalarPredictionService | None:
         return None
 
 
+def _geometry_mapping_for_scalar_service(
+    scalar_service: ScalarPredictionService | None,
+) -> CurrentDOEGeometryMapping:
+    if scalar_service is None:
+        return CurrentDOEGeometryMapping.current_fixed_spacing()
+    return CurrentDOEGeometryMapping.from_registry(scalar_service.registry)
+
+
 def _initialize_scalar_prediction_state(state, scalar_service: ScalarPredictionService | None) -> None:
     if scalar_service is None:
         state.scalar_prediction_available = False
@@ -356,8 +490,8 @@ def _initialize_scalar_prediction_state(state, scalar_service: ScalarPredictionS
     state.scalar_pz_206_max = float(scalar_service.domain_max[0])
     state.scalar_cz_301_radius_min = float(scalar_service.domain_min[1])
     state.scalar_cz_301_radius_max = float(scalar_service.domain_max[1])
-    state.scalar_pz_206 = 5.6
-    state.scalar_cz_301_radius = 4.8
+    state.scalar_pz_206 = INITIAL_PZ_206_CM
+    state.scalar_cz_301_radius = INITIAL_CZ_301_RADIUS_CM
     _update_scalar_prediction_state(
         state,
         scalar_service,
@@ -389,6 +523,68 @@ def _update_scalar_prediction_state(
     state.scalar_li7_tbr_text = _format_scalar_value(prediction.kpis.li7_tbr)
     state.scalar_multiplying_text = _format_scalar_value(prediction.kpis.multiplying)
     state.scalar_warning_text = prediction.metadata.warning or ""
+
+
+def _initialize_component_display_state(state, scene) -> None:
+    for group, key in COMPONENT_GROUP_STATE_KEYS.items():
+        setattr(state, f"component_color_{key}", DEFAULT_COMPONENT_GROUP_COLORS[group])
+        setattr(state, f"component_visible_{key}", True)
+    state.cad_clipping_axis_options = ["X", "Y", "Z"]
+    state.cad_clipping_enabled = False
+    state.cad_clipping_axis = "Z"
+    state.cad_clipping_invert = False
+    _refresh_clipping_axis_bounds(state, scene, preserve_position=False)
+    state.cad_clip_position = state.cad_clip_default
+
+
+def _bind_component_display_handlers(state, controller, scene) -> None:
+    for group, key in COMPONENT_GROUP_STATE_KEYS.items():
+        color_field = f"component_color_{key}"
+        visible_field = f"component_visible_{key}"
+
+        def _make_color_handler(component_group: str, field: str):
+            @state.change(field)
+            def _on_component_color_change(**_kwargs):
+                scene.set_component_group_color(component_group, str(getattr(state, field)))
+                controller.view_update()
+
+            return _on_component_color_change
+
+        def _make_visibility_handler(component_group: str, field: str):
+            @state.change(field)
+            def _on_component_visibility_change(**_kwargs):
+                scene.set_component_group_visibility(
+                    component_group,
+                    bool(getattr(state, field)),
+                )
+                state.cad_bounds_text = _format_bounds(scene.component_bounds_mm)
+                _refresh_clipping_axis_bounds(state, scene, preserve_position=True)
+                controller.view_update()
+
+            return _on_component_visibility_change
+
+        _make_color_handler(group, color_field)
+        _make_visibility_handler(group, visible_field)
+
+
+def _refresh_clipping_axis_bounds(state, scene, preserve_position: bool) -> None:
+    bounds = scene.component_bounds_mm if scene is not None else (0.0, 1.0, 0.0, 1.0, 0.0, 1.0)
+    axis = str(getattr(state, "cad_clipping_axis", "Z")).upper()
+    axis_indices = {"X": (0, 1), "Y": (2, 3), "Z": (4, 5)}
+    lower_index, upper_index = axis_indices.get(axis, (4, 5))
+    lower = float(bounds[lower_index])
+    upper = float(bounds[upper_index])
+    default = (lower + upper) * 0.5
+    state.cad_clip_min = lower
+    state.cad_clip_max = upper
+    state.cad_clip_default = default
+    if not preserve_position:
+        state.cad_clip_position = default
+        return
+
+    position = float(getattr(state, "cad_clip_position", default))
+    if position < lower or position > upper:
+        state.cad_clip_position = default
 
 
 def _format_scalar_value(value: float) -> str:

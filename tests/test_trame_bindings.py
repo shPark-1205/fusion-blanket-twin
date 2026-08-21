@@ -22,7 +22,14 @@ class TrameBindingTests(unittest.TestCase):
             'v_model=("scalar_cz_301_radius", state.scalar_cz_301_radius)',
             source,
         )
-        self.assertIn("The 3D heating field remains the currently loaded MCNP simulation", source)
+        self.assertIn("The 3D Total Heating field remains the currently loaded MCNP simulation", source)
+
+    def test_component_controls_are_bound_in_browser_ui(self):
+        source = Path("app/viewer.py").read_text()
+        self.assertIn("Component Colors", source)
+        self.assertIn("Component Visibility", source)
+        self.assertIn("CAD Clipping", source)
+        self.assertIn('v_model=("cad_clipping_enabled", state.cad_clipping_enabled)', source)
 
 
 if __name__ == "__main__":

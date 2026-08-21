@@ -39,6 +39,20 @@ class VisualizationSmokeTests(unittest.TestCase):
         finally:
             scene.plotter.close()
 
+    def test_scene_step_geometry_source_still_builds(self):
+        scene = build_blanket_viewer_scene(
+            SAMPLE_CAD_PATH,
+            SAMPLE_MCNP_PATH,
+            off_screen=True,
+            geometry_source="step",
+        )
+        try:
+            self.assertEqual(scene.geometry_source, "step")
+            self.assertIsNone(scene.component_view)
+            self.assertEqual(scene.cad.tessellated.body_count, 26)
+        finally:
+            scene.plotter.close()
+
     def test_scene_cad_opacity_update(self):
         scene = build_blanket_viewer_scene(
             SAMPLE_CAD_PATH,
@@ -48,6 +62,32 @@ class VisualizationSmokeTests(unittest.TestCase):
         try:
             scene.update_cad_opacity(0.4)
             self.assertAlmostEqual(scene.cad_opacity, 0.4)
+        finally:
+            scene.plotter.close()
+
+    def test_parametric_geometry_update_does_not_replace_mcnp_dataset(self):
+        scene = build_blanket_viewer_scene(
+            SAMPLE_CAD_PATH,
+            SAMPLE_MCNP_PATH,
+            off_screen=True,
+        )
+        try:
+            original_mesh = scene.mcnp.mesh_mm
+            original_cell_count = scene.mcnp.mesh_mm.n_cells
+            updated = scene.primitive_csg.__class__(
+                pz_206=6.6,
+                pz_207=6.7,
+                pz_208=6.9,
+                pz_209=7.0,
+                cz_301_radius=5.0,
+                cz_302_radius=4.9,
+                cz_303_radius=4.7,
+                cz_304_radius=4.6,
+            )
+            scene.update_parametric_geometry(updated)
+            self.assertIs(scene.mcnp.mesh_mm, original_mesh)
+            self.assertEqual(scene.mcnp.mesh_mm.n_cells, original_cell_count)
+            self.assertIn(REQUIRED_MCNP_FIELD, scene.mcnp.mesh_mm.cell_data)
         finally:
             scene.plotter.close()
 
