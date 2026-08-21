@@ -14,7 +14,16 @@ class TrameBindingTests(unittest.TestCase):
         self.assertIn('v_model=("slice_z", scene.slice_z_mm)', source)
         self.assertIn('v_model=("cad_opacity", scene.cad_opacity)', source)
 
+    def test_scalar_design_panel_is_separate_from_3d_field(self):
+        source = Path("app/viewer.py").read_text()
+        self.assertIn("Scalar Design", source)
+        self.assertIn('v_model=("scalar_pz_206", state.scalar_pz_206)', source)
+        self.assertIn(
+            'v_model=("scalar_cz_301_radius", state.scalar_cz_301_radius)',
+            source,
+        )
+        self.assertIn("The 3D heating field remains the currently loaded MCNP simulation", source)
+
 
 if __name__ == "__main__":
     unittest.main()
-

@@ -17,11 +17,16 @@ from fusion_blanket_twin.config.settings import (  # noqa: E402
     SAMPLE_CAD_PATH,
     SAMPLE_MCNP_PATH,
 )
+from fusion_blanket_twin.surrogate.service import ScalarPredictionService  # noqa: E402
 from fusion_blanket_twin.visualization.mcnp import (  # noqa: E402
     create_z_heating_slice,
     load_mcnp_heating_geometry,
 )
 from fusion_blanket_twin.visualization.scene import build_blanket_viewer_scene  # noqa: E402
+
+
+LOCAL_MCNP_INPUT_DIR = ROOT / "data" / "local" / "mcnp_inputs"
+LOCAL_SCALAR_WORKBOOK = ROOT / "data" / "local" / "fusion_blanket_twin_100case_results_parsed.xlsx"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -71,6 +76,7 @@ def launch_trame_viewer(
 
     server = get_server(client_type="vue3")
     state, controller = server.state, server.controller
+    scalar_service = _try_build_scalar_prediction_service()
 
     scene = None
     zmin = zmax = None
@@ -92,6 +98,7 @@ def launch_trame_viewer(
 
     state.ui_stage = ui_stage
     state.case_metadata = _case_metadata_lines()
+    _initialize_scalar_prediction_state(state, scalar_service)
 
     if scene is not None and hasattr(scene, "cad"):
         state.cad_bounds_text = _format_bounds(scene.cad.summary.bounds_mm)
@@ -123,6 +130,17 @@ def launch_trame_viewer(
         def _on_opacity_change(cad_opacity, **_kwargs):
             scene.update_cad_opacity(float(cad_opacity))
             controller.view_update()
+
+    if scalar_service is not None:
+        @state.change("scalar_pz_206")
+        @state.change("scalar_cz_301_radius")
+        def _on_scalar_design_change(scalar_pz_206, scalar_cz_301_radius, **_kwargs):
+            _update_scalar_prediction_state(
+                state,
+                scalar_service,
+                float(scalar_pz_206),
+                float(scalar_cz_301_radius),
+            )
 
     def _button_action() -> None:
         if scene is not None:
@@ -168,10 +186,46 @@ def launch_trame_viewer(
                 vuetify.VCardText(f"CAD bounds: {state.cad_bounds_text}")
                 vuetify.VCardText(f"MCNP bounds: {state.mcnp_bounds_text}")
                 vuetify.VCardText(f"Heating range: {state.field_range_text}")
+                vuetify.VCardText("3D field: loaded MCNP simulation")
                 vuetify.VDivider(classes="my-2")
                 vuetify.VCardText("Case")
                 for line in state.case_metadata:
                     vuetify.VCardText(line)
+                vuetify.VDivider(classes="my-2")
+                vuetify.VCardText("Scalar Design")
+                if scalar_service is None:
+                    vuetify.VCardText("Scalar prediction unavailable")
+                else:
+                    vuetify.VSlider(
+                        v_model=("scalar_pz_206", state.scalar_pz_206),
+                        min=float(state.scalar_pz_206_min),
+                        max=float(state.scalar_pz_206_max),
+                        step=0.05,
+                        label="PZ 206 cm",
+                        thumb_label=True,
+                        hide_details=True,
+                    )
+                    vuetify.VSlider(
+                        v_model=("scalar_cz_301_radius", state.scalar_cz_301_radius),
+                        min=float(state.scalar_cz_301_radius_min),
+                        max=float(state.scalar_cz_301_radius_max),
+                        step=0.01,
+                        label="CZ 301 radius cm",
+                        thumb_label=True,
+                        hide_details=True,
+                    )
+                    vuetify.VCardText("{{ scalar_source_text }}")
+                    vuetify.VCardText("Nearest MCNP case: {{ scalar_nearest_case_text }}")
+                    vuetify.VCardText("Total TBR: {{ scalar_total_tbr_text }}")
+                    vuetify.VCardText("Li-6 TBR: {{ scalar_li6_tbr_text }}")
+                    vuetify.VCardText("Li-7 TBR: {{ scalar_li7_tbr_text }}")
+                    vuetify.VCardText("Multiplying: {{ scalar_multiplying_text }}")
+                    vuetify.VCardText("{{ scalar_warning_text }}")
+                    vuetify.VCardText(
+                        "Scalar KPIs follow the selected design parameters. "
+                        "The 3D heating field remains the currently loaded MCNP simulation "
+                        "until field-surrogate integration is available."
+                    )
         with layout.content:
             if scene is None:
                 vuetify.VContainer(
@@ -273,6 +327,72 @@ def _case_metadata_lines() -> list[str]:
         f"Expected Tout: {case.expected_outlet_temperature_c:g} C",
         f"Mass flow: {case.mass_flow}",
     ]
+
+
+def _try_build_scalar_prediction_service() -> ScalarPredictionService | None:
+    try:
+        return ScalarPredictionService.from_paths(
+            LOCAL_MCNP_INPUT_DIR,
+            LOCAL_SCALAR_WORKBOOK,
+        )
+    except (FileNotFoundError, ValueError):
+        return None
+
+
+def _initialize_scalar_prediction_state(state, scalar_service: ScalarPredictionService | None) -> None:
+    if scalar_service is None:
+        state.scalar_prediction_available = False
+        state.scalar_source_text = "Scalar prediction unavailable"
+        state.scalar_nearest_case_text = "not loaded"
+        state.scalar_total_tbr_text = "not loaded"
+        state.scalar_li6_tbr_text = "not loaded"
+        state.scalar_li7_tbr_text = "not loaded"
+        state.scalar_multiplying_text = "not loaded"
+        state.scalar_warning_text = ""
+        return
+
+    state.scalar_prediction_available = True
+    state.scalar_pz_206_min = float(scalar_service.domain_min[0])
+    state.scalar_pz_206_max = float(scalar_service.domain_max[0])
+    state.scalar_cz_301_radius_min = float(scalar_service.domain_min[1])
+    state.scalar_cz_301_radius_max = float(scalar_service.domain_max[1])
+    state.scalar_pz_206 = 5.6
+    state.scalar_cz_301_radius = 4.8
+    _update_scalar_prediction_state(
+        state,
+        scalar_service,
+        state.scalar_pz_206,
+        state.scalar_cz_301_radius,
+    )
+
+
+def _update_scalar_prediction_state(
+    state,
+    scalar_service: ScalarPredictionService,
+    pz_206: float,
+    cz_301_radius: float,
+) -> None:
+    prediction = scalar_service.predict(pz_206, cz_301_radius)
+    source_label = {
+        "simulation": "SIMULATION",
+        "surrogate": "SURROGATE PREDICTION",
+    }[prediction.metadata.source]
+    if prediction.metadata.domain_status == "extrapolation":
+        source_label = "EXTRAPOLATION"
+
+    state.scalar_source_text = (
+        f"{source_label} - {prediction.metadata.domain_status.upper()}"
+    )
+    state.scalar_nearest_case_text = prediction.metadata.nearest_case_id
+    state.scalar_total_tbr_text = _format_scalar_value(prediction.kpis.total_tbr)
+    state.scalar_li6_tbr_text = _format_scalar_value(prediction.kpis.li6_tbr)
+    state.scalar_li7_tbr_text = _format_scalar_value(prediction.kpis.li7_tbr)
+    state.scalar_multiplying_text = _format_scalar_value(prediction.kpis.multiplying)
+    state.scalar_warning_text = prediction.metadata.warning or ""
+
+
+def _format_scalar_value(value: float) -> str:
+    return f"{value:.6g}"
 
 
 def _format_bounds(bounds: tuple[float, float, float, float, float, float]) -> str:
