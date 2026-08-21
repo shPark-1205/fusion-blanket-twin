@@ -17,6 +17,8 @@ class SampleDataTests(unittest.TestCase):
         self.assertAlmostEqual(cad.bounds_mm[5], 921.0)
 
     def test_mcnp_required_field_and_bounds(self):
+        if not SAMPLE_MCNP_PATH.exists():
+            self.skipTest(f"sample MCNP file not available: {SAMPLE_MCNP_PATH}")
         mcnp = read_mcnp_summary(SAMPLE_MCNP_PATH)
         self.assertEqual(mcnp.field_name, REQUIRED_MCNP_FIELD)
         self.assertIn(REQUIRED_MCNP_FIELD, mcnp.cell_arrays)
@@ -24,6 +26,8 @@ class SampleDataTests(unittest.TestCase):
         self.assertAlmostEqual(mcnp.bounds_mm[5], 921.0, delta=1.0e-4)
 
     def test_raw_probe_outside_mesh(self):
+        if not SAMPLE_MCNP_PATH.exists():
+            self.skipTest(f"sample MCNP file not available: {SAMPLE_MCNP_PATH}")
         probe = McnpRawVoxelProbe(SAMPLE_MCNP_PATH)
         result = probe.probe((10_000.0, 0.0, 0.0))
         self.assertEqual(result.status, "out_of_bounds")

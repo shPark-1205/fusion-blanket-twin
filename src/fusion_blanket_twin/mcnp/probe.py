@@ -9,6 +9,7 @@ from fusion_blanket_twin.config.settings import (
     MCNP_TO_PROJECT_LENGTH_SCALE,
     REQUIRED_MCNP_FIELD,
 )
+from fusion_blanket_twin.mcnp.fields import CANONICAL_MCNP_FIELD_ARRAYS
 
 
 @dataclass(frozen=True)
@@ -18,6 +19,21 @@ class ProbeResult:
     value: float | None
     field_name: str
     status: str
+
+
+@dataclass(frozen=True)
+class MultiFieldProbeResult:
+    point_mm: tuple[float, float, float]
+    cell_id: int | None
+    values: dict[str, float]
+    active_field_name: str | None
+    status: str
+
+    @property
+    def active_value(self) -> float | None:
+        if self.active_field_name is None:
+            return None
+        return self.values.get(self.active_field_name)
 
 
 class McnpRawVoxelProbe:
@@ -31,11 +47,13 @@ class McnpRawVoxelProbe:
         self,
         vtkhdf_path: Path,
         field_name: str = REQUIRED_MCNP_FIELD,
+        field_names: tuple[str, ...] = CANONICAL_MCNP_FIELD_ARRAYS,
         block_path: str = "VTKHDF/Block_2",
     ) -> None:
         h5py, np = _import_hdf_dependencies()
         self._np = np
         self.field_name = field_name
+        self.field_names = field_names
         self.path = vtkhdf_path
 
         if not vtkhdf_path.exists():
@@ -46,15 +64,24 @@ class McnpRawVoxelProbe:
             points_cm = block["Points"][:]
             connectivity = block["Connectivity"][:]
             offsets = block["Offsets"][:]
-            if field_name not in block["CellData"]:
+            cell_data = block["CellData"]
+            if field_name not in cell_data:
                 available = ", ".join(block["CellData"].keys())
                 raise ValueError(
                     f"Required MCNP field '{field_name}' not found. "
                     f"Available cell fields: {available}"
                 )
-            values = block["CellData"][field_name][:]
+            missing = [name for name in field_names if name not in cell_data]
+            if missing:
+                available = ", ".join(cell_data.keys())
+                raise ValueError(
+                    "Required MCNP probe fields missing: "
+                    + ", ".join(missing)
+                    + f". Available cell fields: {available}"
+                )
+            field_values = {name: cell_data[name][:] for name in field_names}
 
-        cell_count = len(values)
+        cell_count = len(field_values[field_name])
         if len(offsets) != cell_count + 1:
             raise ValueError("VTKHDF offsets do not match cell data length.")
 
@@ -63,7 +90,8 @@ class McnpRawVoxelProbe:
         maxs_cm = voxel_points.max(axis=1)
         self._mins_mm = mins_cm * MCNP_TO_PROJECT_LENGTH_SCALE
         self._maxs_mm = maxs_cm * MCNP_TO_PROJECT_LENGTH_SCALE
-        self._values = values
+        self._field_values = field_values
+        self._values = field_values[field_name]
         self.bounds_mm = (
             float(self._mins_mm[:, 0].min()),
             float(self._maxs_mm[:, 0].max()),
@@ -95,6 +123,32 @@ class McnpRawVoxelProbe:
             status="ok",
         )
 
+    def probe_all(
+        self,
+        point_mm: tuple[float, float, float],
+        active_field_name: str | None = None,
+    ) -> MultiFieldProbeResult:
+        """Return raw containing-voxel values for every configured field."""
+        single = self.probe(point_mm)
+        if single.cell_id is None:
+            return MultiFieldProbeResult(
+                point_mm=point_mm,
+                cell_id=None,
+                values={},
+                active_field_name=active_field_name,
+                status=single.status,
+            )
+        return MultiFieldProbeResult(
+            point_mm=point_mm,
+            cell_id=single.cell_id,
+            values={
+                name: float(values[single.cell_id])
+                for name, values in self._field_values.items()
+            },
+            active_field_name=active_field_name,
+            status="ok",
+        )
+
 
 def _import_hdf_dependencies():
     try:
@@ -106,4 +160,3 @@ def _import_hdf_dependencies():
             "Install project requirements before probing MCNP data."
         ) from exc
     return h5py, np
-

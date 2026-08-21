@@ -16,13 +16,13 @@ class TrameBindingTests(unittest.TestCase):
 
     def test_scalar_design_panel_is_separate_from_3d_field(self):
         source = Path("app/viewer.py").read_text()
-        self.assertIn("Scalar Design", source)
+        self.assertIn("DESIGN", source)
         self.assertIn('v_model=("scalar_pz_206", state.scalar_pz_206)', source)
         self.assertIn(
             'v_model=("scalar_cz_301_radius", state.scalar_cz_301_radius)',
             source,
         )
-        self.assertIn("The 3D Total Heating field remains the currently loaded MCNP simulation", source)
+        self.assertIn("The 3D MCNP field remains the currently loaded simulation dataset", source)
 
     def test_component_controls_are_bound_in_browser_ui(self):
         source = Path("app/viewer.py").read_text()
@@ -30,6 +30,14 @@ class TrameBindingTests(unittest.TestCase):
         self.assertIn("Component Visibility", source)
         self.assertIn("CAD Clipping", source)
         self.assertIn('v_model=("cad_clipping_enabled", state.cad_clipping_enabled)', source)
+
+    def test_mcnp_field_controls_are_bound_in_browser_ui(self):
+        source = Path("app/viewer.py").read_text()
+        self.assertIn("NEUTRONICS", source)
+        self.assertIn('state.mcnp_visualization_modes = ["Off", "Slice", "Iso-surface"]', source)
+        self.assertIn('v_model=("mcnp_active_field_key", state.mcnp_active_field_key)', source)
+        self.assertIn('v_model=("mcnp_slice_axis", state.mcnp_slice_axis)', source)
+        self.assertIn('v_model=("mcnp_visualization_mode", state.mcnp_visualization_mode)', source)
 
 
 if __name__ == "__main__":

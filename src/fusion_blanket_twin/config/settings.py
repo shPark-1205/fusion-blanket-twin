@@ -10,10 +10,11 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 SAMPLE_DATA_DIR = PROJECT_ROOT / "data" / "sample"
 
 SAMPLE_CAD_PATH = SAMPLE_DATA_DIR / "test_blanket.stp"
-SAMPLE_MCNP_PATH = SAMPLE_DATA_DIR / "test_total_heating.vtkhdf"
+SAMPLE_MCNP_PATH = SAMPLE_DATA_DIR / "test.vtkhdf"
+SAMPLE_LEGACY_MCNP_PATH = SAMPLE_DATA_DIR / "test_total_heating.vtkhdf"
 
 MCNP_TO_PROJECT_LENGTH_SCALE = 10.0
-REQUIRED_MCNP_FIELD = "Total heating (W_cm3)"
+REQUIRED_MCNP_FIELD = "Nuclear heating (W_cm3)"
 
 
 @dataclass(frozen=True)
@@ -30,4 +31,3 @@ class RepresentativeCase:
 
 
 REPRESENTATIVE_CASE = RepresentativeCase()
-
