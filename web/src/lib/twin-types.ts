@@ -10,6 +10,7 @@ export type ScalarSource = "Simulation" | "Surrogate Prediction";
 export type FieldSource = "Not connected";
 export type VisualizationMode = "Off" | "Slice" | "Iso-surface";
 export type SliceAxis = "X" | "Y" | "Z";
+export type ComponentId = "armor" | "breeder" | "multiplier" | "structure" | "coolant";
 
 export interface DesignParameter {
   id: "pz_206" | "cz_301_radius";
@@ -52,7 +53,7 @@ export interface TwinProvenance {
 }
 
 export interface ComponentState {
-  id: string;
+  id: ComponentId;
   label: "Armor" | "Breeder" | "Multiplier" | "Structure" | "Coolant";
   color: string;
   visible: boolean;

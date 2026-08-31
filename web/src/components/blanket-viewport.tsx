@@ -1,6 +1,9 @@
 "use client";
 
-import { Box, Eye, EyeOff, Focus, Layers3, Maximize2, RotateCcw, ScanLine } from "lucide-react";
+import dynamic from "next/dynamic";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Box, Eye, EyeOff, Focus, Maximize2, Minimize2, RotateCcw, ScanLine } from "lucide-react";
+import type { GeometryReadyMetrics } from "@/components/blanket-three-scene";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -8,7 +11,14 @@ import { cn } from "@/lib/utils";
 import { mockTwinState } from "@/lib/mock-twin-state";
 import { useTwinStore } from "@/lib/twin-store";
 
-function UnavailableTool({ label, children }: { label: string; children: React.ReactNode }) {
+const BlanketThreeScene = dynamic(
+  () => import("@/components/blanket-three-scene").then((module) => module.BlanketThreeScene),
+  { ssr: false },
+);
+
+type GeometryState = "loading" | "ready" | "error";
+
+function UnavailableTool({ label, reason, children }: { label: string; reason: string; children: React.ReactNode }) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -16,72 +26,8 @@ function UnavailableTool({ label, children }: { label: string; children: React.R
           <Button variant="ghost" size="icon" aria-label={`${label} — unavailable`} disabled>{children}</Button>
         </span>
       </TooltipTrigger>
-      <TooltipContent>{label} · Available after scientific 3D integration</TooltipContent>
+      <TooltipContent>{label} · {reason}</TooltipContent>
     </Tooltip>
-  );
-}
-
-function BlanketSchematic() {
-  const selectedId = useTwinStore((state) => state.selectedComponentId);
-  const visibility = useTwinStore((state) => state.componentVisibility);
-  const selectComponent = useTwinStore((state) => state.selectComponent);
-  const layers = [
-    { id: "armor", x: 92, width: 45 },
-    { id: "structure", x: 145, width: 68 },
-    { id: "multiplier", x: 221, width: 122 },
-    { id: "breeder", x: 351, width: 228 },
-    { id: "coolant", x: 587, width: 101 },
-  ];
-
-  return (
-    <div className="blanket-model" aria-label="Presentation preview of blanket components">
-      <svg viewBox="0 0 780 420" role="img">
-        <title>Conceptual layered blanket component preview; not scientific geometry</title>
-        <defs>
-          <pattern id="previewHatch" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
-            <line x1="0" y1="0" x2="0" y2="8" stroke="#ffffff" strokeOpacity=".06" strokeWidth="2" />
-          </pattern>
-        </defs>
-        <g className="preview-flow" aria-hidden="true">
-          <text x="34" y="190">PLASMA</text><path d="M36 210H75" />
-          <text x="706" y="190">+R</text><path d="M696 210h45" />
-        </g>
-        <rect x="84" y="78" width="612" height="260" rx="5" className="preview-frame" />
-        {layers.map((layer) => {
-          const component = mockTwinState.components.find((item) => item.id === layer.id)!;
-          const visible = visibility[layer.id];
-          const selected = selectedId === layer.id;
-          return (
-            <g
-              key={layer.id}
-              className={cn("preview-layer", selected && "is-selected", !visible && "is-hidden")}
-              role="button"
-              tabIndex={0}
-              aria-label={`Select ${component.label} component`}
-              aria-pressed={selected}
-              onClick={() => selectComponent(layer.id)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" || event.key === " ") {
-                  event.preventDefault();
-                  selectComponent(layer.id);
-                }
-              }}
-            >
-              <rect x={layer.x} y="86" width={layer.width} height="244" fill={visible ? component.color : "#263139"} />
-              <rect x={layer.x} y="86" width={layer.width} height="244" fill="url(#previewHatch)" />
-              <text x={layer.x + layer.width / 2} y="358" textAnchor="middle">{component.label.toUpperCase()}</text>
-            </g>
-          );
-        })}
-        <g className="coolant-channels" opacity={visibility.coolant ? 1 : 0.15} aria-hidden="true">
-          {[0, 1, 2].map((index) => <circle key={index} cx={612 + index * 29} cy="205" r="10" />)}
-        </g>
-      </svg>
-      <div className="model-caption">
-        <span>PRESENTATION PREVIEW</span>
-        <strong>CONCEPTUAL LAYERS · NOT CAD OR FIELD DATA</strong>
-      </div>
-    </div>
   );
 }
 
@@ -92,7 +38,7 @@ function ComponentControls() {
   const toggleComponent = useTwinStore((state) => state.toggleComponent);
 
   return (
-    <div className="component-legend" aria-label="Component selection and visibility">
+    <div className="component-legend" aria-label="Web CAD component selection and visibility">
       {mockTwinState.components.map((component) => (
         <div key={component.id} className={cn("component-control", selectedId === component.id && "is-selected")}>
           <button type="button" onClick={() => selectComponent(component.id)} aria-pressed={selectedId === component.id} data-testid={`component-${component.id}`}>
@@ -116,6 +62,12 @@ function ComponentControls() {
 }
 
 export function BlanketViewport() {
+  const viewportRef = useRef<HTMLElement>(null);
+  const [geometryState, setGeometryState] = useState<GeometryState>("loading");
+  const [geometryError, setGeometryError] = useState("");
+  const [metrics, setMetrics] = useState<GeometryReadyMetrics | null>(null);
+  const [cameraFeedback, setCameraFeedback] = useState("Orbit · zoom · pan enabled");
+  const [fullscreen, setFullscreen] = useState(false);
   const section = useTwinStore((state) => state.section);
   const fieldId = useTwinStore((state) => state.activeFieldId);
   const mode = useTwinStore((state) => state.visualizationMode);
@@ -124,46 +76,119 @@ export function BlanketViewport() {
   const slicePositions = useTwinStore((state) => state.slicePositions);
   const pz = useTwinStore((state) => state.appliedPz206);
   const cz = useTwinStore((state) => state.appliedCz301);
+  const visibility = useTwinStore((state) => state.componentVisibility);
+  const selectedComponentId = useTwinStore((state) => state.selectedComponentId);
+  const cameraCommand = useTwinStore((state) => state.cameraCommand);
+  const requestCamera = useTwinStore((state) => state.requestCamera);
   const field = mockTwinState.fields.find((item) => item.id === fieldId)!;
   const neutronics = section === "neutronics";
+
+  const handleReady = useCallback((readyMetrics: GeometryReadyMetrics) => {
+    setMetrics(readyMetrics);
+    setGeometryState("ready");
+  }, []);
+  const handleError = useCallback((message: string) => {
+    setGeometryError(message);
+    setGeometryState("error");
+  }, []);
+
+  useEffect(() => {
+    const handleFullscreen = () => setFullscreen(document.fullscreenElement === viewportRef.current);
+    document.addEventListener("fullscreenchange", handleFullscreen);
+    return () => document.removeEventListener("fullscreenchange", handleFullscreen);
+  }, []);
+
   const displaySummary = neutronics
     ? mode === "Off"
       ? `${field.displayName} · display off`
       : `${mode} · ${axis} · ${slicePositions[axis]} mm · ${log ? "Log" : "Linear"}`
     : `Applied PZ ${pz.toFixed(2)} cm · CZ ${cz.toFixed(2)} cm`;
 
+  const runCameraCommand = (action: "reset" | "fit") => {
+    requestCamera(action);
+    setCameraFeedback(action === "reset" ? "Camera reset to engineering view" : "Assembly fitted to viewport");
+  };
+
+  const toggleFullscreen = async () => {
+    try {
+      if (document.fullscreenElement) await document.exitFullscreen();
+      else await viewportRef.current?.requestFullscreen();
+      setCameraFeedback(document.fullscreenElement ? "Viewport entered fullscreen" : "Viewport exited fullscreen");
+    } catch {
+      setCameraFeedback("Fullscreen is unavailable in this browser context");
+    }
+  };
+
   return (
-    <section className="viewport" aria-label="Geometry presentation preview" data-testid="geometry-preview">
+    <section ref={viewportRef} className="viewport" aria-label="Interactive Web CAD geometry" data-testid="geometry-viewport">
       <div className="viewport-header">
         <div>
-          <span className="viewport-kicker"><Box size={12} /> GEOMETRY PREVIEW</span>
-          <h2>Blanket Unit Cell <small>/ Conceptual component layout</small></h2>
+          <span className="viewport-kicker"><Box size={12} /> WEB CAD GEOMETRY</span>
+          <h2>Blanket Unit Cell <small>/ GLB derived from STEP</small></h2>
         </div>
         <div className="viewport-state" data-testid="viewport-state">
-          <span><i /> {neutronics ? field.displayName : "Local design state"}</span>
-          <Badge tone={neutronics ? "amber" : "cyan"}>{neutronics ? "Mock display" : "Presentation preview"}</Badge>
+          <span><i className={geometryState === "error" ? "is-error" : ""} /> {neutronics ? field.displayName : "Web CAD Geometry"}</span>
+          <Badge tone={geometryState === "ready" ? "green" : geometryState === "error" ? "amber" : "muted"}>
+            {geometryState === "ready" ? "Geometry ready" : geometryState === "error" ? "Asset unavailable" : "Loading geometry"}
+          </Badge>
         </div>
       </div>
+
       <TooltipProvider delayDuration={150}>
-        <div className="viewport-toolbar" aria-label="Scientific viewport tools unavailable">
-          <UnavailableTool label="Reset camera"><RotateCcw size={14} /></UnavailableTool>
-          <UnavailableTool label="Fit assembly"><Focus size={14} /></UnavailableTool>
-          <UnavailableTool label="Scientific section plane"><ScanLine size={14} /></UnavailableTool>
-          <UnavailableTool label="3D component layers"><Layers3 size={14} /></UnavailableTool>
+        <div className="viewport-toolbar" aria-label="Web CAD viewport tools">
+          <Tooltip><TooltipTrigger asChild>
+            <Button variant="ghost" size="icon" aria-label="Reset camera" disabled={geometryState !== "ready"} onClick={() => runCameraCommand("reset")} data-testid="reset-camera"><RotateCcw size={14} /></Button>
+          </TooltipTrigger><TooltipContent>Reset camera · Restore the engineering view</TooltipContent></Tooltip>
+          <Tooltip><TooltipTrigger asChild>
+            <Button variant="ghost" size="icon" aria-label="Fit assembly" disabled={geometryState !== "ready"} onClick={() => runCameraCommand("fit")} data-testid="fit-assembly"><Focus size={14} /></Button>
+          </TooltipTrigger><TooltipContent>Fit assembly · Frame all visible geometry</TooltipContent></Tooltip>
+          <UnavailableTool label="Section plane" reason="Clipping is deferred for this milestone"><ScanLine size={14} /></UnavailableTool>
           <span className="toolbar-divider" />
-          <UnavailableTool label="Fullscreen 3D viewport"><Maximize2 size={14} /></UnavailableTool>
+          <Tooltip><TooltipTrigger asChild>
+            <Button variant="ghost" size="icon" aria-label={fullscreen ? "Exit fullscreen" : "Enter fullscreen"} disabled={geometryState !== "ready"} onClick={toggleFullscreen}>
+              {fullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+            </Button>
+          </TooltipTrigger><TooltipContent>{fullscreen ? "Exit fullscreen" : "Open geometry viewport fullscreen"}</TooltipContent></Tooltip>
         </div>
       </TooltipProvider>
-      <BlanketSchematic />
+
+      <div className="geometry-canvas-shell">
+        <BlanketThreeScene cameraCommand={cameraCommand} onReady={handleReady} onError={handleError} />
+        {geometryState === "loading" && (
+          <div className="geometry-load-state" role="status" data-testid="geometry-loading">
+            <span className="geometry-spinner" /><strong>Loading blanket geometry</strong><small>Reading GLB presentation asset</small>
+          </div>
+        )}
+        {geometryState === "error" && (
+          <div className="geometry-load-state geometry-error" role="alert" data-testid="geometry-error">
+            <Box size={24} /><strong>Blanket geometry asset unavailable</strong><small>{geometryError}</small><code>public/models/blanket_unit_cell.glb</code>
+          </div>
+        )}
+      </div>
+
+      <div className="geometry-provenance">
+        <span>GEOMETRY<strong>Web CAD Geometry</strong></span>
+        <span>SOURCE<strong>GLB derived from STEP</strong></span>
+        <span>SCIENTIFIC FIELD<strong className="is-unavailable">Not connected</strong></span>
+      </div>
+
       <div className="preview-status" data-testid="preview-status">
         <span>{displaySummary}</span>
-        <small>{neutronics && mode !== "Off" ? "State only — no scientific field rendered" : "No vtk.js renderer connected"}</small>
+        <small>{neutronics ? "Scientific field rendering not connected" : cameraFeedback}</small>
       </div>
+
       <ComponentControls />
+      {metrics && (
+        <div className="geometry-diagnostics" data-testid="geometry-ready" data-load-ms={metrics.totalMs.toFixed(1)} data-resource-ms={metrics.resourceMs?.toFixed(1) ?? "unknown"}>
+          {mockTwinState.components.map((component) => (
+            <span key={component.id} data-testid={`geometry-group-${component.id}`} data-visible={visibility[component.id]} data-selected={selectedComponentId === component.id} data-mesh-count={metrics.groups[component.id]} />
+          ))}
+        </div>
+      )}
       <div className="viewport-footer">
-        <span>COORDINATE CONVENTION: +Z = TOKAMAK +R</span>
-        <span>DISPLAY UNITS: MM</span>
-        <span>PRESENTATION ONLY</span>
+        <span>PROJECT AXES: +Z = TOKAMAK +R · Z=0 PLASMA-FACING ARMOR</span>
+        <span>SOURCE / DISPLAY: MM</span>
+        <span>{metrics ? `${metrics.triangles.toLocaleString()} TRIANGLES · ${metrics.meshes} MESHES` : "GLB DERIVED FROM STEP"}</span>
       </div>
     </section>
   );

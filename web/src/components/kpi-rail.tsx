@@ -50,6 +50,8 @@ export function KpiRail() {
   const activeFieldId = useTwinStore((state) => state.activeFieldId);
   const selectedComponentId = useTwinStore((state) => state.selectedComponentId);
   const componentVisibility = useTwinStore((state) => state.componentVisibility);
+  const componentOpacity = useTwinStore((state) => state.componentOpacity);
+  const setComponentOpacity = useTwinStore((state) => state.setComponentOpacity);
   const activeField = mockTwinState.fields.find((field) => field.id === activeFieldId)!;
   const selectedComponent = mockTwinState.components.find((component) => component.id === selectedComponentId)!;
 
@@ -74,13 +76,27 @@ export function KpiRail() {
         </div>
         <div className="compact-pairs">
           <span>Component state<strong>{componentVisibility[selectedComponentId] ? "Shown" : "Hidden"}</strong></span>
-          <span>Active display<strong>{section === "neutronics" ? activeField.displayName : "Geometry preview"}</strong></span>
+          <span>Active display<strong>{section === "neutronics" ? activeField.displayName : "Web CAD"}</strong></span>
         </div>
+        <label className="opacity-control">
+          <span>Presentation opacity <output data-testid="component-opacity-value">{Math.round(componentOpacity[selectedComponentId] * 100)}%</output></span>
+          <input
+            type="range"
+            min="15"
+            max="100"
+            step="5"
+            value={Math.round(componentOpacity[selectedComponentId] * 100)}
+            aria-label={`${selectedComponent.label} opacity`}
+            data-testid="component-opacity"
+            onChange={(event) => setComponentOpacity(selectedComponentId, Number(event.target.value) / 100)}
+          />
+        </label>
       </div>
 
       <div className="rail-section provenance-section">
         <div className="rail-title"><span>DATA PROVENANCE</span><Database size={13} /></div>
-        <ProvenanceRow label="Geometry" value={mockTwinState.provenance.geometry} />
+        <ProvenanceRow label="Authoritative geometry" value={mockTwinState.provenance.geometry} />
+        <ProvenanceRow label="Web presentation" value="GLB derived from STEP" />
         <ProvenanceRow label="Scalar KPI" value={mockTwinState.provenance.scalarKpis} />
         <ProvenanceRow label="Scientific 3D" value={mockTwinState.provenance.field} unavailable />
         <ProvenanceRow label="Thermal / CFX" value="Unavailable" unavailable />
