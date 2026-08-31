@@ -102,7 +102,7 @@ export function BlanketViewport() {
     ? mode === "Off"
       ? `${field.displayName} · display off`
       : `${mode} · ${axis} · ${slicePositions[axis]} mm · ${log ? "Log" : "Linear"}`
-    : `Applied PZ ${pz.toFixed(2)} cm · CZ ${cz.toFixed(2)} cm`;
+    : `Scalar design PZ ${pz.toFixed(2)} cm · CZ ${cz.toFixed(2)} cm · CAD fixed`;
 
   const runCameraCommand = (action: "reset" | "fit") => {
     requestCamera(action);
@@ -169,6 +169,7 @@ export function BlanketViewport() {
       <div className="geometry-provenance">
         <span>GEOMETRY<strong>Web CAD Geometry</strong></span>
         <span>SOURCE<strong>GLB derived from STEP</strong></span>
+        <span>DISPLAYED CAD<strong>Fixed representative geometry</strong></span>
         <span>SCIENTIFIC FIELD<strong className="is-unavailable">Not connected</strong></span>
       </div>
 

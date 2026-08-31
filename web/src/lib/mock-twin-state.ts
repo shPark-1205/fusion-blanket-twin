@@ -1,6 +1,7 @@
 import type { TwinState } from "./twin-types";
 
-// Presentation-only state. A future backend adapter will satisfy the same contracts.
+// Presentation-only geometry, field-control, and operating-basis state.
+// Scalar KPIs are intentionally supplied only by the Python Twin API.
 export const mockTwinState: TwinState = {
   design: {
     caseId: "REP-0326",
@@ -10,7 +11,6 @@ export const mockTwinState: TwinState = {
       cz_301_radius: { id: "cz_301_radius", label: "CZ 301", value: 4.8, min: 3.6, max: 4.8, step: 0.01, unit: "cm" },
     },
   },
-  kpis: { totalTbr: 1.233, li6Tbr: null, li7Tbr: null, multiplying: null },
   fields: [
     { id: "neutron_flux", displayName: "Neutron Flux", category: "Flux", units: "n/cm²/s", logRecommended: true, range: null },
     { id: "photon_flux", displayName: "Photon Flux", category: "Flux", units: "n/cm²/s", logRecommended: true, range: null },

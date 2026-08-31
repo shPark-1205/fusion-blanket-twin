@@ -36,6 +36,9 @@ test("every exposed interaction is functional, local-state, or explicitly unavai
   await expect(page.getByText("Web CAD Geometry", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("GLB derived from STEP", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("Scientific 3D not connected", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("api-status")).toContainText("Twin API · Connected");
+  await expect(page.getByTestId("kpi-total-tbr")).not.toHaveText("--");
+  await expect(page.getByTestId("scalar-source")).toHaveText("Simulation");
 
   // The real camera actions are enabled and each reports immediate feedback.
   await page.getByTestId("reset-camera").click();
@@ -43,21 +46,38 @@ test("every exposed interaction is functional, local-state, or explicitly unavai
   await page.getByTestId("fit-assembly").click();
   await expect(page.getByTestId("preview-status")).toContainText("Assembly fitted to viewport");
 
-  // Overview -> Design and both design sliders mutate visible local state.
+  // Overview -> Design; local slider motion marks the real scalar prediction pending.
   await page.getByTestId("nav-design").click();
   await expect(page.getByRole("heading", { name: "Design variables" })).toBeVisible();
-  await expect(page.getByTestId("reset-geometry")).toBeDisabled();
+  await expect(page.getByTestId("reset-design")).toBeDisabled();
   await page.getByRole("slider", { name: "PZ 206" }).press("Home");
   await expect(page.getByTestId("pz-206-slider-value")).toContainText("2.60");
   await page.getByRole("slider", { name: "CZ 301 radius" }).press("Home");
-  await expect(page.getByTestId("reset-geometry")).toBeEnabled();
+  await expect(page.getByTestId("reset-design")).toBeEnabled();
   await expect(page.getByTestId("cz-301-slider-value")).toContainText("3.60");
-  await expect(page.getByText("Geometry update pending", { exact: true })).toBeVisible();
-  await page.getByTestId("apply-geometry").click();
-  await expect(page.getByText(/Applied · PZ 2\.60 · CZ 3\.60 cm/)).toBeVisible();
-  await expect(page.getByTestId("preview-status")).toContainText("Applied PZ 2.60 cm · CZ 3.60 cm");
-  await page.getByTestId("reset-geometry").click();
-  await expect(page.getByText("Geometry update pending", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("prediction-status")).toContainText("Prediction pending");
+
+  await page.route("**/api/predict/scalars", async (route) => {
+    if (route.request().method() === "POST") await new Promise((resolve) => setTimeout(resolve, 250));
+    await route.continue();
+  });
+  await page.getByTestId("apply-design").click();
+  await expect(page.getByTestId("prediction-updating")).toContainText("Updating prediction");
+  await expect(page.getByTestId("prediction-status")).toContainText("Predicted · PZ 2.60 · CZ 3.60 cm");
+  await expect(page.getByTestId("kpi-total-tbr")).toHaveText("1.12856");
+  await expect(page.getByTestId("scalar-source")).toHaveText("Simulation");
+  await expect(page.getByTestId("nearest-case")).toHaveText("104-A");
+  await expect(page.getByTestId("preview-status")).toContainText("CAD fixed");
+
+  // An in-domain non-DOE coordinate is served by the real polynomial surrogate.
+  for (let index = 0; index < 10; index += 1) await page.getByRole("slider", { name: "PZ 206" }).press("ArrowRight");
+  for (let index = 0; index < 20; index += 1) await page.getByRole("slider", { name: "CZ 301 radius" }).press("ArrowRight");
+  await expect(page.getByTestId("pz-206-slider-value")).toContainText("3.10");
+  await expect(page.getByTestId("cz-301-slider-value")).toContainText("3.80");
+  const exactTotalTbr = await page.getByTestId("kpi-total-tbr").textContent();
+  await page.getByTestId("apply-design").click();
+  await expect(page.getByTestId("scalar-source")).toHaveText("Surrogate Prediction");
+  await expect(page.getByTestId("kpi-total-tbr")).not.toHaveText(exactTotalTbr ?? "1.12856");
 
   // Design -> Neutronics and every mock display control produces visible feedback.
   await page.getByTestId("nav-neutronics").click();
@@ -127,4 +147,15 @@ test("a missing geometry asset fails clearly without crashing the workspace", as
   await expect(page.getByTestId("geometry-error")).toContainText("Blanket geometry asset unavailable");
   await expect(page.getByTestId("reset-camera")).toBeDisabled();
   await expect(page.getByTestId("nav-design")).toBeEnabled();
+});
+
+test("an unavailable Python API does not crash or disable the Web CAD viewport", async ({ page }) => {
+  await page.route("http://127.0.0.1:8000/api/**", (route) => route.abort("connectionrefused"));
+  await page.goto("/");
+  await expect(page.getByTestId("api-status")).toContainText("Twin API · Offline");
+  await expect(page.getByTestId("prediction-error")).toContainText("Twin API is unavailable");
+  await expect(page.getByTestId("geometry-ready")).toBeAttached({ timeout: 15_000 });
+  await expect(page.getByTestId("reset-camera")).toBeEnabled();
+  await page.getByTestId("reset-camera").click();
+  await expect(page.getByTestId("preview-status")).toContainText("Camera reset to engineering view");
 });

@@ -28,11 +28,54 @@ export interface DesignState {
   breederRatio: number;
 }
 
-export interface ScalarKPIs {
-  totalTbr: number;
-  li6Tbr: number | null;
-  li7Tbr: number | null;
-  multiplying: number | null;
+export type TwinApiStatus = "checking" | "connected" | "offline";
+export type PredictionStatus = "idle" | "pending" | "success" | "error";
+
+export interface TwinApiHealth {
+  status: "ok" | "degraded";
+  api_version: string;
+  scalar_prediction: "ready" | "unavailable";
+  case_count: number;
+  startup_seconds: number;
+}
+
+export interface DesignVariableDomain {
+  minimum: number;
+  maximum: number;
+  levels: number[];
+  unit: "cm";
+}
+
+export interface DesignDomain {
+  pz_206: DesignVariableDomain;
+  cz_301_radius: DesignVariableDomain;
+}
+
+export interface ScalarPredictionRequest {
+  pz_206: number;
+  cz_301_radius: number;
+}
+
+export interface ScalarPredictionResponse {
+  design: ScalarPredictionRequest & {
+    units: { pz_206: "cm"; cz_301_radius: "cm" };
+  };
+  kpis: {
+    total_tbr: number;
+    li6_tbr: number;
+    li7_tbr: number;
+    multiplying: number;
+  };
+  metadata: {
+    source: "simulation" | "surrogate";
+    status: "exact" | "predicted";
+    domain_status: "exact" | "boundary" | "interpolation" | "extrapolation";
+    warning: string | null;
+    nearest_case: string;
+    nearest_distance: number;
+    model_name: string;
+    model_metadata: Record<string, unknown>;
+  };
 }
 
 export interface FieldMetadata {
@@ -62,7 +105,6 @@ export interface ComponentState {
 
 export interface TwinState {
   design: DesignState;
-  kpis: ScalarKPIs;
   fields: FieldMetadata[];
   activeFieldId: string;
   provenance: TwinProvenance;

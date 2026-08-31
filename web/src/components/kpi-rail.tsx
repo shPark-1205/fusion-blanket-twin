@@ -10,16 +10,18 @@ function Kpi({
   value,
   unit,
   accent,
+  testId,
 }: {
   label: string;
   value: string;
   unit?: string;
   accent?: "cyan" | "amber";
+  testId?: string;
 }) {
   return (
     <div className={`kpi ${accent ? `kpi-${accent}` : ""}`}>
       <span>{label}</span>
-      <strong>{value}<small>{unit}</small></strong>
+      <strong data-testid={testId}>{value}<small>{unit}</small></strong>
       <i />
     </div>
   );
@@ -52,19 +54,27 @@ export function KpiRail() {
   const componentVisibility = useTwinStore((state) => state.componentVisibility);
   const componentOpacity = useTwinStore((state) => state.componentOpacity);
   const setComponentOpacity = useTwinStore((state) => state.setComponentOpacity);
+  const prediction = useTwinStore((state) => state.prediction);
+  const predictionStatus = useTwinStore((state) => state.predictionStatus);
+  const predictionError = useTwinStore((state) => state.predictionError);
   const activeField = mockTwinState.fields.find((field) => field.id === activeFieldId)!;
   const selectedComponent = mockTwinState.components.find((component) => component.id === selectedComponentId)!;
+  const scalarSource = prediction?.metadata.source === "simulation" ? "Simulation" : "Surrogate Prediction";
+  const scalarBadge = predictionStatus === "pending" ? "Updating" : prediction ? scalarSource : "Unavailable";
 
   return (
     <aside className="kpi-rail">
       <div className="rail-section kpi-section">
-        <div className="rail-title"><span>PERFORMANCE</span><Badge tone="green">Simulation</Badge></div>
+        <div className="rail-title"><span>PERFORMANCE</span><Badge tone={prediction?.metadata.source === "simulation" ? "green" : prediction ? "cyan" : "muted"} data-testid="scalar-source">{scalarBadge}</Badge></div>
         <div className="kpi-grid">
-          <Kpi label="Total TBR" value={mockTwinState.kpis.totalTbr.toFixed(3)} accent="cyan" />
-          <Kpi label="Li-6 TBR" value="--" />
-          <Kpi label="Li-7 TBR" value="--" />
-          <Kpi label="Multiplying" value="--" />
+          <Kpi label="Total TBR" value={prediction ? prediction.kpis.total_tbr.toFixed(5) : "--"} accent="cyan" testId="kpi-total-tbr" />
+          <Kpi label="Li-6 TBR" value={prediction ? prediction.kpis.li6_tbr.toFixed(5) : "--"} testId="kpi-li6-tbr" />
+          <Kpi label="Li-7 TBR" value={prediction ? prediction.kpis.li7_tbr.toFixed(5) : "--"} testId="kpi-li7-tbr" />
+          <Kpi label="Multiplying" value={prediction ? prediction.kpis.multiplying.toFixed(5) : "--"} testId="kpi-multiplying" />
         </div>
+        {predictionStatus === "pending" && <div className="prediction-message" data-testid="prediction-updating">Updating prediction…</div>}
+        {predictionStatus === "error" && <div className="prediction-message prediction-message-error" data-testid="prediction-error">{predictionError}</div>}
+        {prediction?.metadata.warning && <div className="prediction-message prediction-message-warning" data-testid="extrapolation-warning">{prediction.metadata.warning}</div>}
       </div>
 
       <div className="rail-section selected-section">
@@ -97,7 +107,9 @@ export function KpiRail() {
         <div className="rail-title"><span>DATA PROVENANCE</span><Database size={13} /></div>
         <ProvenanceRow label="Authoritative geometry" value={mockTwinState.provenance.geometry} />
         <ProvenanceRow label="Web presentation" value="GLB derived from STEP" />
-        <ProvenanceRow label="Scalar KPI" value={mockTwinState.provenance.scalarKpis} />
+        <ProvenanceRow label="Scalar KPIs" value={prediction ? scalarSource : "Unavailable"} unavailable={!prediction} />
+        <ProvenanceRow label="Domain state" value={prediction?.metadata.domain_status ?? "Unavailable"} unavailable={!prediction} />
+        <ProvenanceRow label="Nearest simulation" value={prediction?.metadata.nearest_case ?? "Unavailable"} unavailable={!prediction} />
         <ProvenanceRow label="Scientific 3D" value={mockTwinState.provenance.field} unavailable />
         <ProvenanceRow label="Thermal / CFX" value="Unavailable" unavailable />
         <ProvenanceRow label="Experiment" value="Future / unavailable" unavailable />

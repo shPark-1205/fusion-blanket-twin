@@ -6,3 +6,6 @@ trame
 trame-vtk
 trame-vuetify
 cadquery
+fastapi
+uvicorn
+httpx

@@ -13,12 +13,21 @@ export default defineConfig({
     trace: "on-first-retry",
     screenshot: "only-on-failure",
   },
-  webServer: {
-    command: "npm run dev",
-    url: "http://127.0.0.1:3000",
-    reuseExistingServer: !process.env.CI,
-    timeout: 120_000,
-  },
+  webServer: [
+    {
+      command: "..\\.venv\\Scripts\\python.exe -m uvicorn fusion_blanket_twin.api.app:app --host 127.0.0.1 --port 8000",
+      url: "http://127.0.0.1:8000/api/health",
+      env: { PYTHONPATH: "../src" },
+      reuseExistingServer: !process.env.CI,
+      timeout: 120_000,
+    },
+    {
+      command: "npm run dev",
+      url: "http://127.0.0.1:3000",
+      reuseExistingServer: !process.env.CI,
+      timeout: 120_000,
+    },
+  ],
   projects: [
     {
       name: "chromium-desktop",

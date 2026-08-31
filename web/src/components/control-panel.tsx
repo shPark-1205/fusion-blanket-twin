@@ -77,17 +77,19 @@ function ParameterControl({
 function OverviewControls() {
   const appliedPz206 = useTwinStore((state) => state.appliedPz206);
   const appliedCz301 = useTwinStore((state) => state.appliedCz301);
+  const apiStatus = useTwinStore((state) => state.apiStatus);
+  const prediction = useTwinStore((state) => state.prediction);
   return (
     <>
       <div className="status-block">
-        <div className="status-icon status-icon-ok"><Check size={14} /></div>
-        <div><strong>Presentation state loaded</strong><span>Local representative configuration</span></div>
+        <div className={`status-icon ${apiStatus === "connected" ? "status-icon-ok" : ""}`}><Check size={14} /></div>
+        <div><strong>{apiStatus === "connected" ? "Python twin connected" : "CAD presentation available"}</strong><span>{apiStatus === "connected" ? "Scalar predictor ready" : "Scalar prediction API unavailable"}</span></div>
       </div>
       <div className="panel-section">
         <div className="section-label">DESIGN SNAPSHOT</div>
         <MetricRow label="PZ 206" value={appliedPz206.toFixed(2)} unit="cm" />
         <MetricRow label="CZ 301" value={appliedCz301.toFixed(2)} unit="cm" />
-        <MetricRow label="Breeder fraction" value="0.326" />
+        <MetricRow label="Scalar source" value={prediction?.metadata.source === "simulation" ? "Simulation" : prediction ? "Surrogate" : "Unavailable"} />
       </div>
       <div className="panel-section">
         <div className="section-label">OPERATING BASIS</div>
@@ -97,7 +99,7 @@ function OverviewControls() {
       </div>
       <div className="info-note">
         <Database size={13} />
-        <p>Local UI values describe the reference case. No Python API, vtk.js renderer, or MCNP field is connected.</p>
+        <p>Scalar KPIs come from the Python twin API. The displayed GLB remains a fixed representative CAD asset; no vtk.js or MCNP field is connected.</p>
       </div>
     </>
   );
@@ -108,31 +110,44 @@ function DesignControls() {
   const cz301 = useTwinStore((state) => state.cz301);
   const appliedPz206 = useTwinStore((state) => state.appliedPz206);
   const appliedCz301 = useTwinStore((state) => state.appliedCz301);
+  const designDomain = useTwinStore((state) => state.designDomain);
+  const predictionStatus = useTwinStore((state) => state.predictionStatus);
+  const predictionError = useTwinStore((state) => state.predictionError);
   const setPz206 = useTwinStore((state) => state.setPz206);
   const setCz301 = useTwinStore((state) => state.setCz301);
-  const applyGeometry = useTwinStore((state) => state.applyGeometry);
-  const resetGeometry = useTwinStore((state) => state.resetGeometry);
+  const applyDesign = useTwinStore((state) => state.applyDesign);
+  const resetDesign = useTwinStore((state) => state.resetDesign);
   const pz = mockTwinState.design.parameters.pz_206;
   const cz = mockTwinState.design.parameters.cz_301_radius;
   const pending = pz206 !== appliedPz206 || cz301 !== appliedCz301;
   const atDefaults = pz206 === pz.value && cz301 === cz.value;
+  const pzDomain = designDomain?.pz_206;
+  const czDomain = designDomain?.cz_301_radius;
+  const applying = predictionStatus === "pending";
+  const stateText = applying
+    ? "Updating prediction…"
+    : predictionStatus === "error"
+      ? `${predictionError ?? "Prediction unavailable"}${pending ? " · design pending" : ""}`
+      : pending
+        ? "Prediction pending"
+        : `Predicted · PZ ${appliedPz206.toFixed(2)} · CZ ${appliedCz301.toFixed(2)} cm`;
 
   return (
     <>
       <div className="panel-section panel-section-first">
         <div className="section-label">CURRENT DOE CONTROLS</div>
-        <ParameterControl label="PZ 206" value={pz206} min={pz.min} max={pz.max} step={pz.step} onChange={setPz206} testId="pz-206-slider" />
-        <ParameterControl label="CZ 301 radius" value={cz301} min={cz.min} max={cz.max} step={cz.step} onChange={setCz301} testId="cz-301-slider" />
+        <ParameterControl label="PZ 206" value={pz206} min={pzDomain?.minimum ?? pz.min} max={pzDomain?.maximum ?? pz.max} step={pz.step} onChange={setPz206} testId="pz-206-slider" />
+        <ParameterControl label="CZ 301 radius" value={cz301} min={czDomain?.minimum ?? cz.min} max={czDomain?.maximum ?? cz.max} step={cz.step} onChange={setCz301} testId="cz-301-slider" />
         <div className="geometry-actions">
-          <Button onClick={applyGeometry} data-testid="apply-geometry" disabled={!pending}>
-            <ScanLine size={13} /> Apply Geometry
+          <Button onClick={() => void applyDesign()} data-testid="apply-design" disabled={!pending || applying}>
+            <ScanLine size={13} /> Apply Design
           </Button>
-          <Button variant="outline" onClick={resetGeometry} data-testid="reset-geometry" disabled={atDefaults}>
+          <Button variant="outline" onClick={resetDesign} data-testid="reset-design" disabled={atDefaults || applying}>
             <RotateCcw size={13} /> Reset
           </Button>
         </div>
-        <div className={`apply-state ${pending ? "apply-state-pending" : ""}`}>
-          <span />{pending ? "Geometry update pending" : `Applied · PZ ${appliedPz206.toFixed(2)} · CZ ${appliedCz301.toFixed(2)} cm`}
+        <div className={`apply-state ${(pending || applying || predictionStatus === "error") ? "apply-state-pending" : ""}`} data-testid="prediction-status">
+          <span />{stateText}
         </div>
       </div>
       <div className="design-space">
@@ -144,7 +159,7 @@ function DesignControls() {
       </div>
       <div className="info-note">
         <FlaskConical size={13} />
-        <p>PZ 206–209 and CZ 301–304 are grouped only for the current DOE. Primitive CSG parameters remain independent.</p>
+        <p>Apply Design requests real scalar KPIs. The Web CAD asset is fixed and does not deform to these PZ/CZ values; parametric web geometry is not connected.</p>
       </div>
     </>
   );
@@ -230,23 +245,26 @@ function ThermalControls() {
 }
 
 function PerformanceControls() {
+  const prediction = useTwinStore((state) => state.prediction);
+  const predictionStatus = useTwinStore((state) => state.predictionStatus);
+  const source = prediction?.metadata.source === "simulation" ? "Simulation" : "Surrogate Prediction";
   return (
     <>
       <div className="panel-section panel-section-first">
         <div className="section-label">BREEDING PERFORMANCE</div>
-        <div className="primary-reading"><span>Total TBR</span><strong>1.233</strong><Badge tone="green">Simulation</Badge></div>
+        <div className="primary-reading"><span>Total TBR</span><strong>{prediction ? prediction.kpis.total_tbr.toFixed(5) : "--"}</strong><Badge tone={prediction?.metadata.source === "simulation" ? "green" : "cyan"}>{predictionStatus === "pending" ? "Updating" : prediction ? source : "Unavailable"}</Badge></div>
       </div>
       <div className="panel-section">
-        <MetricRow label="Li-6 TBR" value="--" />
-        <MetricRow label="Li-7 TBR" value="--" />
-        <MetricRow label="Multiplying" value="--" />
+        <MetricRow label="Li-6 TBR" value={prediction ? prediction.kpis.li6_tbr.toFixed(5) : "--"} />
+        <MetricRow label="Li-7 TBR" value={prediction ? prediction.kpis.li7_tbr.toFixed(5) : "--"} />
+        <MetricRow label="Multiplying" value={prediction ? prediction.kpis.multiplying.toFixed(5) : "--"} />
       </div>
       <div className="panel-section">
         <div className="section-label">REFERENCE CONDITIONS</div>
         <MetricRow label="Breeder fraction" value="0.326" />
         <MetricRow label="NWL" value="1.34" unit="MW/m²" />
       </div>
-      <div className="info-note"><FlaskConical size={13} /><p>Only verified representative values are shown. Unavailable scalar outputs remain explicitly blank.</p></div>
+      <div className="info-note"><FlaskConical size={13} /><p>Values are returned by the Python ScalarPredictionService. Exact DOE coordinates use simulation results; other points are labeled surrogate predictions.</p></div>
     </>
   );
 }

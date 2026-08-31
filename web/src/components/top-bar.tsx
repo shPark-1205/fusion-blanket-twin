@@ -1,8 +1,13 @@
+"use client";
+
 import { Activity, Atom, Database, Hexagon } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { mockTwinState } from "@/lib/mock-twin-state";
+import { useTwinStore } from "@/lib/twin-store";
 
 export function TopBar() {
+  const apiStatus = useTwinStore((state) => state.apiStatus);
+  const prediction = useTwinStore((state) => state.prediction);
+  const statusLabel = apiStatus === "connected" ? "Twin API · Connected" : apiStatus === "offline" ? "Twin API · Offline" : "Twin API · Checking";
   return (
     <header className="top-bar">
       <div className="brand-lockup">
@@ -18,11 +23,13 @@ export function TopBar() {
         <span className="context-title">Solid Breeder Unit Cell</span>
       </div>
       <div className="top-status">
-        <Badge tone="green"><Activity size={10} /> Presentation Ready</Badge>
+        <Badge tone={apiStatus === "connected" ? "green" : apiStatus === "offline" ? "amber" : "muted"} data-testid="api-status">
+          <Activity size={10} /> {statusLabel}
+        </Badge>
         <Badge tone="muted"><Database size={10} /> Scientific 3D not connected</Badge>
-        <div className="case-select" aria-label="Current representative design">
+        <div className="case-select" aria-label="Nearest simulation case">
           <Hexagon size={13} />
-          <span><small>REFERENCE DESIGN</small>{mockTwinState.design.caseId}</span>
+          <span><small>NEAREST SIMULATION</small><strong data-testid="nearest-case">{prediction?.metadata.nearest_case ?? "--"}</strong></span>
         </div>
       </div>
     </header>
