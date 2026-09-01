@@ -1,6 +1,12 @@
 import { create } from "zustand";
 import { mockTwinState } from "./mock-twin-state";
 import { twinApi, TwinApiError } from "./twin-api";
+import {
+  loadScientificField,
+  type ScientificFieldData,
+  type ScientificFieldStatus,
+  type ScientificLoadMetrics,
+} from "./scientific-field";
 import type {
   ComponentId,
   ComponentState,
@@ -28,6 +34,10 @@ interface TwinUiState {
   predictionStatus: PredictionStatus;
   prediction: ScalarPredictionResponse | null;
   predictionError: string | null;
+  scientificFieldStatus: ScientificFieldStatus;
+  scientificField: ScientificFieldData | null;
+  scientificFieldError: string | null;
+  scientificLoadMetrics: ScientificLoadMetrics | null;
   activeFieldId: string;
   visualizationMode: VisualizationMode;
   sliceAxis: SliceAxis;
@@ -38,6 +48,8 @@ interface TwinUiState {
   componentOpacity: Record<ComponentId, number>;
   cameraCommand: CameraCommand;
   initializeTwinApi: () => Promise<void>;
+  initializeScientificField: () => Promise<void>;
+  reportScientificRender: (firstRenderMs: number | null, sliceUpdateMs: number) => void;
   setSection: (section: WorkspaceSection) => void;
   setPz206: (value: number) => void;
   setCz301: (value: number) => void;
@@ -55,6 +67,7 @@ interface TwinUiState {
 }
 
 let initializationPromise: Promise<void> | null = null;
+let scientificInitializationPromise: Promise<void> | null = null;
 
 export const useTwinStore = create<TwinUiState>((set, get) => ({
   section: "overview",
@@ -68,11 +81,15 @@ export const useTwinStore = create<TwinUiState>((set, get) => ({
   predictionStatus: "idle",
   prediction: null,
   predictionError: null,
+  scientificFieldStatus: "idle",
+  scientificField: null,
+  scientificFieldError: null,
+  scientificLoadMetrics: null,
   activeFieldId: mockTwinState.activeFieldId,
   visualizationMode: "Slice",
   sliceAxis: "Z",
   useLogScale: false,
-  slicePositions: { X: 0, Y: 0, Z: 420 },
+  slicePositions: { X: 0, Y: 0, Z: 460.5 },
   selectedComponentId: "breeder",
   componentVisibility: Object.fromEntries(
     mockTwinState.components.map((component: ComponentState) => [component.id, component.visible]),
@@ -83,6 +100,19 @@ export const useTwinStore = create<TwinUiState>((set, get) => ({
     initializationPromise ??= initializeTwinState();
     return initializationPromise;
   },
+  initializeScientificField: () => {
+    scientificInitializationPromise ??= initializeScientificState();
+    return scientificInitializationPromise;
+  },
+  reportScientificRender: (firstRenderMs, sliceUpdateMs) => set((state) => ({
+    scientificLoadMetrics: state.scientificLoadMetrics
+      ? {
+          ...state.scientificLoadMetrics,
+          firstRenderMs: state.scientificLoadMetrics.firstRenderMs ?? firstRenderMs,
+          sliceUpdateMs,
+        }
+      : null,
+  })),
   setSection: (section) => set({ section }),
   setPz206: (pz206) => set({ pz206 }),
   setCz301: (cz301) => set({ cz301 }),
@@ -125,6 +155,30 @@ export const useTwinStore = create<TwinUiState>((set, get) => ({
   })),
   requestCamera: (action) => set((state) => ({ cameraCommand: { action, sequence: state.cameraCommand.sequence + 1 } })),
 }));
+
+async function initializeScientificState(): Promise<void> {
+  useTwinStore.setState({ scientificFieldStatus: "loading-metadata", scientificFieldError: null });
+  try {
+    const { data, metrics } = await loadScientificField((scientificFieldStatus) => {
+      useTwinStore.setState({ scientificFieldStatus });
+    });
+    useTwinStore.setState((state) => ({
+      scientificField: data,
+      scientificFieldStatus: "ready",
+      scientificFieldError: null,
+      scientificLoadMetrics: metrics,
+      slicePositions: {
+        ...state.slicePositions,
+        Z: data.manifest.slicing.default_position_mm,
+      },
+    }));
+  } catch (error) {
+    useTwinStore.setState({
+      scientificFieldStatus: "error",
+      scientificFieldError: error instanceof Error ? error.message : "Scientific field could not be loaded.",
+    });
+  }
+}
 
 async function initializeTwinState(): Promise<void> {
   useTwinStore.setState({ apiStatus: "checking", predictionStatus: "idle", predictionError: null });

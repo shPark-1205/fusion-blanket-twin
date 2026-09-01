@@ -8,6 +8,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { mockTwinState } from "@/lib/mock-twin-state";
 import { useTwinStore } from "@/lib/twin-store";
 import type { SliceAxis, VisualizationMode } from "@/lib/twin-types";
+import { zCellIndex } from "@/lib/scientific-field";
 
 const sectionMeta = {
   overview: ["SYSTEM", "Twin overview"],
@@ -99,7 +100,7 @@ function OverviewControls() {
       </div>
       <div className="info-note">
         <Database size={13} />
-        <p>Scalar KPIs come from the Python twin API. The displayed GLB remains a fixed representative CAD asset; no vtk.js or MCNP field is connected.</p>
+        <p>Scalar KPIs come from the Python twin API. The GLB remains fixed; the reference MCNP field is loaded independently and never follows arbitrary PZ/CZ selections.</p>
       </div>
     </>
   );
@@ -168,22 +169,31 @@ function DesignControls() {
 function NeutronicsControls() {
   const fieldId = useTwinStore((state) => state.activeFieldId);
   const mode = useTwinStore((state) => state.visualizationMode);
-  const axis = useTwinStore((state) => state.sliceAxis);
-  const log = useTwinStore((state) => state.useLogScale);
   const slicePositions = useTwinStore((state) => state.slicePositions);
-  const setField = useTwinStore((state) => state.setActiveField);
   const setMode = useTwinStore((state) => state.setVisualizationMode);
-  const setAxis = useTwinStore((state) => state.setSliceAxis);
-  const setLog = useTwinStore((state) => state.setUseLogScale);
   const setSlicePosition = useTwinStore((state) => state.setSlicePosition);
+  const scientificStatus = useTwinStore((state) => state.scientificFieldStatus);
+  const scientificField = useTwinStore((state) => state.scientificField);
+  const scientificError = useTwinStore((state) => state.scientificFieldError);
   const active = mockTwinState.fields.find((field) => field.id === fieldId)!;
+  const zRange = scientificField?.manifest.slicing.position_range_mm ?? [0, 921];
+  const layer = scientificField
+    ? zCellIndex(scientificField.manifest.mesh.axis_boundaries_mm.z, slicePositions.Z)
+    : null;
+  const sliceRange = layer === null ? null : scientificField?.manifest.slicing.layer_ranges[layer];
+  const layerMetadata = layer === null ? null : scientificField?.manifest.slicing.layers[layer];
+  const statusLabel = scientificStatus === "ready"
+    ? "Loaded MCNP Simulation"
+    : scientificStatus === "error"
+      ? "Scientific asset unavailable"
+      : scientificStatus.replaceAll("-", " ");
 
   return (
     <>
       <div className="panel-section panel-section-first">
         <label className="section-label" htmlFor="field-selector">ACTIVE FIELD</label>
-        <select id="field-selector" data-testid="field-selector" value={fieldId} onChange={(event) => setField(event.target.value)} className="technical-select">
-          {mockTwinState.fields.map((field) => <option key={field.id} value={field.id}>{field.displayName}</option>)}
+        <select id="field-selector" data-testid="field-selector" value={fieldId} disabled className="technical-select">
+          <option value="nuclear_heating">Total Nuclear Heating</option>
         </select>
         <div className="field-meta">
           <Badge tone={active.category === "Heating" ? "amber" : "cyan"}>{active.category}</Badge>
@@ -193,33 +203,38 @@ function NeutronicsControls() {
       <div className="panel-section">
         <div className="section-label">VISUALIZATION MODE</div>
         <ToggleGroup type="single" value={mode} onValueChange={(value) => value && setMode(value as VisualizationMode)} className="segmented" data-testid="visualization-mode">
-          {(["Off", "Slice", "Iso-surface"] as VisualizationMode[]).map((item) => <ToggleGroupItem key={item} value={item} data-testid={`mode-${item.toLowerCase()}`}>{item}</ToggleGroupItem>)}
+          {(["Off", "Slice"] as VisualizationMode[]).map((item) => <ToggleGroupItem key={item} value={item} data-testid={`mode-${item.toLowerCase()}`}>{item}</ToggleGroupItem>)}
+          <ToggleGroupItem value="Iso-surface" data-testid="mode-iso-surface" disabled title="Unavailable in this milestone">Iso</ToggleGroupItem>
         </ToggleGroup>
       </div>
       <div className="panel-section">
         <div className="section-label">SLICE AXIS</div>
-        <ToggleGroup type="single" value={axis} onValueChange={(value) => value && setAxis(value as SliceAxis)} className="segmented">
-          {(["X", "Y", "Z"] as SliceAxis[]).map((item) => <ToggleGroupItem key={item} value={item} data-testid={`axis-${item.toLowerCase()}`}>{item}</ToggleGroupItem>)}
+        <ToggleGroup type="single" value="Z" className="segmented">
+          {(["X", "Y", "Z"] as SliceAxis[]).map((item) => <ToggleGroupItem key={item} value={item} disabled={item !== "Z"} data-testid={`axis-${item.toLowerCase()}`} title={item === "Z" ? "Z-normal slice" : "Unavailable in this milestone"}>{item}</ToggleGroupItem>)}
         </ToggleGroup>
         <ParameterControl
-          label={`${axis} position`}
-          value={slicePositions[axis]}
-          min={axis === "Z" ? 0 : -73}
-          max={axis === "Z" ? 921 : 73}
+          label="Z position"
+          value={slicePositions.Z}
+          min={zRange[0]}
+          max={zRange[1]}
           step={1}
-          onChange={(value) => setSlicePosition(axis, value)}
+          onChange={(value) => setSlicePosition("Z", value)}
           testId="slice-position"
           unit="mm"
         />
       </div>
       <label className="switch-row">
-        <span><strong>Logarithmic scale</strong><small>{active.logRecommended ? "Recommended for this field" : "Linear display default"}</small></span>
-        <input type="checkbox" checked={log} onChange={(event) => setLog(event.target.checked)} data-testid="log-scale" />
+        <span><strong>Logarithmic scale</strong><small>Unavailable · linear display only</small></span>
+        <input type="checkbox" checked={false} disabled data-testid="log-scale" />
         <i />
       </label>
-      <MetricRow label="Display state" value={`${mode} · ${axis} · ${slicePositions[axis]} mm · ${log ? "Log" : "Linear"}`} />
-      <MetricRow label="Field range" value="Unavailable" />
-      <div className="info-note"><AlertTriangle size={13} /><p>Mock/local display state only. No MCNP values, contours, slices, or iso-surfaces are rendered.</p></div>
+      <MetricRow label="Display state" value={`${mode} · Z · ${slicePositions.Z.toFixed(1)} mm · Linear`} />
+      <MetricRow label="Containing Z layer" value={layerMetadata ? `${layerMetadata.bounds_mm[0].toFixed(1)} – ${layerMetadata.bounds_mm[1].toFixed(1)}` : "Unavailable"} unit={layerMetadata ? "mm" : undefined} />
+      <MetricRow label="Rendered at center" value={layerMetadata ? layerMetadata.center_mm.toFixed(1) : "Unavailable"} unit={layerMetadata ? "mm" : undefined} />
+      <MetricRow label="Global range" value={scientificField ? `${scientificField.manifest.field.web_range[0].toFixed(3)} – ${scientificField.manifest.field.web_range[1].toFixed(3)}` : "Unavailable"} unit={scientificField ? "W/cm³" : undefined} />
+      <MetricRow label="Slice range" value={sliceRange ? `${sliceRange[0].toFixed(3)} – ${sliceRange[1].toFixed(3)}` : "Unavailable"} unit={sliceRange ? "W/cm³" : undefined} />
+      <MetricRow label="3D field" value={statusLabel} />
+      <div className="info-note"><AlertTriangle size={13} /><p>{scientificStatus === "error" ? `${scientificError} CAD and scalar prediction remain available.` : "Reference MCNP simulation · raw containing-voxel cell values · no interpolation. This field does not follow the selected design."}</p></div>
     </>
   );
 }

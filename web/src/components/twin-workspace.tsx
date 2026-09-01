@@ -12,10 +12,12 @@ import { useTwinStore } from "@/lib/twin-store";
 
 export function TwinWorkspace() {
   const initializeTwinApi = useTwinStore((state) => state.initializeTwinApi);
+  const initializeScientificField = useTwinStore((state) => state.initializeScientificField);
 
   useEffect(() => {
     void initializeTwinApi();
-  }, [initializeTwinApi]);
+    void initializeScientificField();
+  }, [initializeScientificField, initializeTwinApi]);
 
   return (
     <main className="twin-app">

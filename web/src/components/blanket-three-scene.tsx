@@ -2,7 +2,7 @@
 
 import { GizmoHelper, GizmoViewport, Html, OrbitControls } from "@react-three/drei";
 import { Canvas, type ThreeEvent, useThree } from "@react-three/fiber";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import type { OrbitControls as OrbitControlsImpl } from "three-stdlib";
@@ -15,6 +15,7 @@ import {
 import type { CameraCommand } from "@/lib/twin-store";
 import { useTwinStore } from "@/lib/twin-store";
 import type { ComponentId } from "@/lib/twin-types";
+import { scientificColor, zCellIndex } from "@/lib/scientific-field";
 
 export interface GeometryReadyMetrics {
   totalMs: number;
@@ -50,6 +51,81 @@ function semanticComponent(object: THREE.Object3D): ComponentId | null {
 function countTriangles(geometry: THREE.BufferGeometry) {
   const elements = geometry.index?.count ?? geometry.getAttribute("position")?.count ?? 0;
   return Math.floor(elements / 3);
+}
+
+function ScientificSlice() {
+  const section = useTwinStore((state) => state.section);
+  const mode = useTwinStore((state) => state.visualizationMode);
+  const positionMm = useTwinStore((state) => state.slicePositions.Z);
+  const field = useTwinStore((state) => state.scientificField);
+  const reportRender = useTwinStore((state) => state.reportScientificRender);
+  const { invalidate } = useThree();
+  const slice = useMemo(() => {
+    if (!field || section !== "neutronics" || mode !== "Slice") return null;
+    const { x, y, z } = field.manifest.mesh.axis_boundaries_mm;
+    const [, ny, nx] = field.manifest.mesh.cell_shape_zyx;
+    const layer = zCellIndex(z, positionMm);
+    const layerCenterMm = (z[layer] + z[layer + 1]) / 2;
+    const verticesPerCell = 6;
+    const positions = new Float32Array(nx * ny * verticesPerCell * 3);
+    const colors = new Float32Array(positions.length);
+    const range = field.manifest.field.web_range;
+    let offset = 0;
+    for (let iy = 0; iy < ny; iy += 1) {
+      for (let ix = 0; ix < nx; ix += 1) {
+        const value = field.values[layer * ny * nx + iy * nx + ix];
+        const color = scientificColor(value, range);
+        const corners = [
+          [x[ix], y[iy]], [x[ix + 1], y[iy]], [x[ix + 1], y[iy + 1]],
+          [x[ix], y[iy]], [x[ix + 1], y[iy + 1]], [x[ix], y[iy + 1]],
+        ];
+        for (const [px, py] of corners) {
+          positions[offset] = px;
+          positions[offset + 1] = py;
+          positions[offset + 2] = layerCenterMm;
+          colors[offset] = color[0];
+          colors[offset + 1] = color[1];
+          colors[offset + 2] = color[2];
+          offset += 3;
+        }
+      }
+    }
+    return { positions, colors, layer, layerCenterMm };
+  }, [field, mode, positionMm, section]);
+
+  useEffect(() => {
+    if (!slice) return;
+    const requested = performance.now();
+    const frame = requestAnimationFrame(() => {
+      const loadMs = useTwinStore.getState().scientificLoadMetrics?.totalMs ?? 0;
+      const updateMs = performance.now() - requested;
+      reportRender(loadMs + updateMs, updateMs);
+      invalidate();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [invalidate, reportRender, slice]);
+
+  if (!slice) return null;
+  return (
+    <mesh
+      scale={BLANKET_GEOMETRY_ADAPTER.sourceToSceneScale}
+      renderOrder={8}
+      userData={{ scientificField: "nuclear_heating", zLayer: slice.layer, zCenterMm: slice.layerCenterMm }}
+    >
+      <bufferGeometry>
+        <bufferAttribute attach="attributes-position" args={[slice.positions, 3]} />
+        <bufferAttribute attach="attributes-color" args={[slice.colors, 3]} />
+      </bufferGeometry>
+      <meshBasicMaterial
+        vertexColors
+        side={THREE.DoubleSide}
+        transparent
+        opacity={0.9}
+        depthWrite={false}
+        toneMapped={false}
+      />
+    </mesh>
+  );
 }
 
 function CameraController({ model, command }: { model: THREE.Group | null; command: CameraCommand }) {
@@ -229,6 +305,7 @@ function BlanketModel({ cameraCommand, onReady, onError }: SceneProps) {
           }}
         />
       )}
+      <ScientificSlice />
       <CameraController model={model} command={cameraCommand} />
       <GizmoHelper alignment="bottom-left" margin={[72, 58]}>
         <GizmoViewport axisColors={["#b95c5c", "#55a16e", "#528ec8"]} labelColor="#dce6ea" />

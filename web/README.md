@@ -1,12 +1,18 @@
 # Fusion Blanket Digital Twin Web
 
-Web presentation layer for the Fusion Blanket Twin. This Next.js application lives beside the existing Python/PyVista/trame scientific viewer. It renders derived CAD presentation geometry and obtains scalar predictions from a thin FastAPI adapter around the existing Python twin engine. It does not load or replace scientific field datasets.
+Web presentation layer for the Fusion Blanket Twin. This Next.js application lives beside the existing Python/PyVista/trame scientific viewer. It renders derived CAD presentation geometry, obtains scalar predictions from a thin FastAPI adapter around the existing Python twin engine, and can load one locally generated MCNP Total Nuclear Heating visualization field.
 
 ## Local development
 
 Requirements: Python 3.12 with `requirements.txt` installed, Node.js 20 or newer, npm, and the local 100-case MCNP inputs/workbook under `data/local/`.
 
-Run the two development processes separately from the repository root.
+Generate the ignored scientific visualization asset from the authoritative local VTKHDF sample:
+
+```cmd
+set PYTHONPATH=src&& .venv\Scripts\python.exe scripts\export_web_scientific_field.py
+```
+
+The command writes `public/scientific/generated/reference-mcnp/nuclear-heating/manifest.json` and `values.f32`. These generated files and the master `data/sample/test.vtkhdf` stay ignored; neither is committed or bundled as source. Then run the two development processes separately from the repository root.
 
 Terminal 1 — Python Twin API:
 
@@ -57,24 +63,26 @@ Playwright starts both the real Python API and the Next.js development server. I
 - `../src/fusion_blanket_twin/api/` is the HTTP-only adapter; scientific prediction logic remains in `ScalarPredictionService` and `CaseRegistry`.
 - `src/lib/twin-types.ts` defines typed HTTP and presentation contracts.
 - `src/lib/twin-api.ts` is the single configurable native-fetch API client.
+- `src/lib/scientific-field.ts` validates and loads the derived rectilinear cell-grid manifest and Float32 visualization array.
 - `src/lib/mock-twin-state.ts` supplies presentation-only geometry, field-control, and operating-basis state; it does not supply scalar KPIs.
 - `src/lib/twin-store.ts` owns local interaction state and the health → domain → initial-prediction lifecycle.
 - `src/lib/blanket-geometry.ts` owns the GLB path, unit adapter, engineering appearances, and source-name-to-semantic-component mapping.
-- `src/components/blanket-three-scene.tsx` owns the React Three Fiber scene, GLB lifecycle, camera, picking, and in-place mesh updates.
+- `src/components/blanket-three-scene.tsx` owns the React Three Fiber scene, GLB lifecycle, camera, picking, and the same-camera scientific slice layer.
 - `src/components/` contains the workstation shell, contextual controls, Web CAD viewport, KPI/provenance rail, and plot area.
 - `src/components/ui/` contains restrained shadcn-style Radix primitives.
 
-The blanket geometry at `public/models/blanket_unit_cell.glb` is a web presentation derivative of STEP geometry. Its numeric coordinates are millimetres and are normalized once to metre-sized Three.js scene units in `blanket-geometry.ts`; the GLB node transforms remain intact. The auxiliary chart is still explicitly labeled as a presentation placeholder. Neither surface colors nor chart shapes are scientific contours or simulation values.
+The blanket geometry at `public/models/blanket_unit_cell.glb` is a web presentation derivative of STEP geometry. Its numeric coordinates are millimetres and are normalized once to metre-sized Three.js scene units in `blanket-geometry.ts`; the GLB node transforms remain intact. MCNP coordinates are transformed from centimetres to millimetres by the documented ×10 scale with no offset or rotation, then share the same scene scaling and camera as the CAD. The auxiliary chart remains explicitly labeled as a presentation placeholder.
 
 ## Interaction scope
 
 - Workspace navigation is functional in the browser.
 - Design sliders update local selected values and mark prediction pending; Apply Design requests real scalar KPIs from Python.
 - The PZ/CZ design state and scalar prediction state are distinct from the fixed representative GLB. Changing design values does not deform the displayed CAD.
-- Field-display, slice-status, and scale controls remain explicitly local presentation state only.
+- Total Nuclear Heating, Z Slice, Z position, and Linear display controls operate on actual MCNP cell data. X/Y, iso-surface, and logarithmic display remain disabled.
 - The viewport uses real GLB presentation geometry with orbit, zoom, pan, picking, Reset Camera, Fit Assembly, and fullscreen behavior.
 - Semantic selection, visibility, and opacity update the already-loaded scene without reloading the GLB.
-- Scientific section/clipping remains visibly unavailable. No flux, heating, slice, iso-surface, or voxel values are rendered on the CAD.
+- The displayed slice uses raw containing-voxel cell values without point interpolation. Its Float32 values are a documented visualization copy; the Float64 VTKHDF remains authoritative.
+- The loaded field is one fixed reference MCNP simulation. It never follows PZ/CZ scalar-surrogate design changes and is labeled accordingly.
 - Thermal-hydraulics is an explicitly unavailable workspace; no CFX data source is connected.
 - Illustrative plots are static and do not expose invented scientific values through hover interactions.
 
@@ -85,4 +93,4 @@ npm run build
 npm run start
 ```
 
-For a future production deployment, the frontend requires a reachable Python Twin API configured with `NEXT_PUBLIC_TWIN_API_URL`. Cloud backend deployment, databases, authentication, object storage, and scientific field delivery remain outside this milestone.
+For a future production deployment, the frontend requires a reachable Python Twin API configured with `NEXT_PUBLIC_TWIN_API_URL`. The current generated field asset is suitable for a local spike, not a 100-case catalog. Cloud backend deployment, databases, authentication, and object storage remain outside this milestone; larger scientific catalogs should use separate backend/object storage rather than the Vercel source bundle.

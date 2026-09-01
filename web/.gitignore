@@ -16,6 +16,9 @@
 /test-results/
 /screenshots/
 
+# locally generated scientific visualization assets
+/public/scientific/generated/
+
 # next.js
 /.next/
 /out/

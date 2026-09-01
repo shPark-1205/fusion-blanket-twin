@@ -7,7 +7,7 @@ export type WorkspaceSection =
 
 export type GeometrySource = "Parametric CSG" | "STEP";
 export type ScalarSource = "Simulation" | "Surrogate Prediction";
-export type FieldSource = "Not connected";
+export type FieldSource = "Not connected" | "Loaded MCNP Simulation";
 export type VisualizationMode = "Off" | "Slice" | "Iso-surface";
 export type SliceAxis = "X" | "Y" | "Z";
 export type ComponentId = "armor" | "breeder" | "multiplier" | "structure" | "coolant";

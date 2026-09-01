@@ -13,6 +13,7 @@ test("captures every workspace at each requested desktop resolution", async ({ p
     await page.setViewportSize({ width: size.width, height: size.height });
     await page.goto("/");
     await expect(page.getByTestId("geometry-ready")).toBeAttached({ timeout: 15_000 });
+    await expect(page.getByTestId("scientific-field-ready")).toBeAttached({ timeout: 15_000 });
     for (const section of sections) {
       await page.getByTestId(`nav-${section}`).click();
       await expect(page.getByTestId(`nav-${section}`)).toHaveAttribute("aria-current", "page");

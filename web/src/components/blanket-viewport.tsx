@@ -2,7 +2,7 @@
 
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Box, Eye, EyeOff, Focus, Maximize2, Minimize2, RotateCcw, ScanLine } from "lucide-react";
+import { AlertTriangle, Box, Eye, EyeOff, Focus, Maximize2, Minimize2, RotateCcw, ScanLine } from "lucide-react";
 import type { GeometryReadyMetrics } from "@/components/blanket-three-scene";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -10,6 +10,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { cn } from "@/lib/utils";
 import { mockTwinState } from "@/lib/mock-twin-state";
 import { useTwinStore } from "@/lib/twin-store";
+import { SCIENTIFIC_COLOR_GRADIENT, zCellIndex } from "@/lib/scientific-field";
 
 const BlanketThreeScene = dynamic(
   () => import("@/components/blanket-three-scene").then((module) => module.BlanketThreeScene),
@@ -80,8 +81,18 @@ export function BlanketViewport() {
   const selectedComponentId = useTwinStore((state) => state.selectedComponentId);
   const cameraCommand = useTwinStore((state) => state.cameraCommand);
   const requestCamera = useTwinStore((state) => state.requestCamera);
+  const scientificStatus = useTwinStore((state) => state.scientificFieldStatus);
+  const scientificField = useTwinStore((state) => state.scientificField);
+  const scientificError = useTwinStore((state) => state.scientificFieldError);
+  const scientificMetrics = useTwinStore((state) => state.scientificLoadMetrics);
   const field = mockTwinState.fields.find((item) => item.id === fieldId)!;
   const neutronics = section === "neutronics";
+  const scientificLayerIndex = scientificField
+    ? zCellIndex(scientificField.manifest.mesh.axis_boundaries_mm.z, slicePositions.Z)
+    : null;
+  const scientificLayer = scientificLayerIndex === null
+    ? null
+    : scientificField?.manifest.slicing.layers[scientificLayerIndex];
 
   const handleReady = useCallback((readyMetrics: GeometryReadyMetrics) => {
     setMetrics(readyMetrics);
@@ -101,7 +112,9 @@ export function BlanketViewport() {
   const displaySummary = neutronics
     ? mode === "Off"
       ? `${field.displayName} · display off`
-      : `${mode} · ${axis} · ${slicePositions[axis]} mm · ${log ? "Log" : "Linear"}`
+       : scientificLayer
+         ? `${mode} · ${axis} selection ${slicePositions[axis].toFixed(1)} mm · layer ${scientificLayer.bounds_mm[0].toFixed(1)}–${scientificLayer.bounds_mm[1].toFixed(1)} mm`
+         : `${mode} · ${axis} · ${slicePositions[axis].toFixed(1)} mm · ${log ? "Log" : "Linear"}`
     : `Scalar design PZ ${pz.toFixed(2)} cm · CZ ${cz.toFixed(2)} cm · CAD fixed`;
 
   const runCameraCommand = (action: "reset" | "fit") => {
@@ -164,18 +177,49 @@ export function BlanketViewport() {
             <Box size={24} /><strong>Blanket geometry asset unavailable</strong><small>{geometryError}</small><code>public/models/blanket_unit_cell.glb</code>
           </div>
         )}
+        {neutronics && scientificStatus !== "ready" && scientificStatus !== "error" && (
+          <div className="scientific-load-state" role="status" data-testid="scientific-loading">
+            <span className="geometry-spinner" />
+            <strong>{scientificStatus === "loading-scalars" ? "Loading scalar array" : scientificStatus === "loading-geometry" ? "Validating scientific geometry" : "Loading scientific metadata"}</strong>
+            <small>Reference MCNP simulation · Total Nuclear Heating</small>
+          </div>
+        )}
+        {neutronics && scientificStatus === "error" && (
+          <div className="scientific-load-state scientific-error" role="alert" data-testid="scientific-error">
+            <AlertTriangle size={20} />
+            <strong>Scientific field asset unavailable</strong>
+            <small>{scientificError}</small>
+            <span>CAD and scalar Twin API remain independent.</span>
+          </div>
+        )}
+        {neutronics && scientificStatus === "ready" && mode === "Slice" && scientificField && (
+          <div className="scientific-scalar-bar" data-testid="scientific-scalar-bar">
+            <div className="scalar-bar-heading"><strong>Total Nuclear Heating</strong><span>W/cm³</span></div>
+            <div className="scalar-bar-body">
+              <div className="scalar-gradient" style={{ background: SCIENTIFIC_COLOR_GRADIENT }} />
+              <div className="scalar-ticks">
+                <span>{scientificField.manifest.field.web_range[1].toFixed(3)}</span>
+                <span>{((scientificField.manifest.field.web_range[0] + scientificField.manifest.field.web_range[1]) / 2).toFixed(3)}</span>
+                <span>{scientificField.manifest.field.web_range[0].toFixed(3)}</span>
+              </div>
+            </div>
+            <small>{scientificLayer ? `Z layer ${scientificLayer.bounds_mm[0].toFixed(1)}–${scientificLayer.bounds_mm[1].toFixed(1)} mm · center ${scientificLayer.center_mm.toFixed(1)} mm` : "Linear · raw cell values"}</small>
+          </div>
+        )}
       </div>
 
       <div className="geometry-provenance">
         <span>GEOMETRY<strong>Web CAD Geometry</strong></span>
         <span>SOURCE<strong>GLB derived from STEP</strong></span>
         <span>DISPLAYED CAD<strong>Fixed representative geometry</strong></span>
-        <span>SCIENTIFIC FIELD<strong className="is-unavailable">Not connected</strong></span>
+        <span>3D SCIENTIFIC FIELD<strong className={scientificStatus === "ready" ? "" : "is-unavailable"}>{scientificStatus === "ready" ? "Loaded MCNP Simulation" : scientificStatus === "error" ? "Asset unavailable" : "Loading"}</strong></span>
+        <span>FIELD<strong>{scientificStatus === "ready" ? "Total Nuclear Heating" : "—"}</strong></span>
+        <span>SOURCE REPRESENTATION<strong>{scientificStatus === "ready" ? "Derived rectilinear cell grid · Float32" : "—"}</strong></span>
       </div>
 
       <div className="preview-status" data-testid="preview-status">
         <span>{displaySummary}</span>
-        <small>{neutronics ? "Scientific field rendering not connected" : cameraFeedback}</small>
+        <small>{neutronics ? "Displayed 3D field: reference MCNP simulation · independent of selected design" : cameraFeedback}</small>
       </div>
 
       <ComponentControls />
@@ -185,6 +229,25 @@ export function BlanketViewport() {
             <span key={component.id} data-testid={`geometry-group-${component.id}`} data-visible={visibility[component.id]} data-selected={selectedComponentId === component.id} data-mesh-count={metrics.groups[component.id]} />
           ))}
         </div>
+      )}
+      {scientificField && scientificStatus === "ready" && (
+        <div
+          className="geometry-diagnostics"
+          data-testid="scientific-field-ready"
+          data-cell-count={scientificField.manifest.mesh.cell_count}
+          data-z-mm={slicePositions.Z.toFixed(1)}
+          data-z-layer={scientificLayerIndex}
+          data-z-layer-bounds={scientificLayer ? scientificLayer.bounds_mm.join(",") : "unknown"}
+          data-rendered-z-mm={scientificLayer?.center_mm.toFixed(1) ?? "unknown"}
+          data-visible={neutronics && mode === "Slice"}
+          data-load-ms={scientificMetrics?.totalMs?.toFixed(1) ?? "unknown"}
+          data-metadata-ms={scientificMetrics?.metadataMs?.toFixed(1) ?? "unknown"}
+          data-geometry-validation-ms={scientificMetrics?.geometryValidationMs?.toFixed(1) ?? "unknown"}
+          data-scalar-download-ms={scientificMetrics?.scalarDownloadMs?.toFixed(1) ?? "unknown"}
+          data-scalar-parse-ms={scientificMetrics?.scalarParseMs?.toFixed(1) ?? "unknown"}
+          data-render-ms={scientificMetrics?.firstRenderMs?.toFixed(1) ?? "unknown"}
+          data-slice-update-ms={scientificMetrics?.sliceUpdateMs?.toFixed(1) ?? "unknown"}
+        />
       )}
       <div className="viewport-footer">
         <span>PROJECT AXES: +Z = TOKAMAK +R · Z=0 PLASMA-FACING ARMOR</span>

@@ -20,7 +20,7 @@ export const mockTwinState: TwinState = {
   ],
   activeFieldId: "nuclear_heating",
   provenance: {
-    geometry: "Parametric CSG",
+    geometry: "STEP",
     scalarKpis: "Simulation",
     field: "Not connected",
     cfxAvailable: false,

@@ -7,6 +7,7 @@ import { useTwinStore } from "@/lib/twin-store";
 export function TopBar() {
   const apiStatus = useTwinStore((state) => state.apiStatus);
   const prediction = useTwinStore((state) => state.prediction);
+  const scientificStatus = useTwinStore((state) => state.scientificFieldStatus);
   const statusLabel = apiStatus === "connected" ? "Twin API · Connected" : apiStatus === "offline" ? "Twin API · Offline" : "Twin API · Checking";
   return (
     <header className="top-bar">
@@ -26,7 +27,12 @@ export function TopBar() {
         <Badge tone={apiStatus === "connected" ? "green" : apiStatus === "offline" ? "amber" : "muted"} data-testid="api-status">
           <Activity size={10} /> {statusLabel}
         </Badge>
-        <Badge tone="muted"><Database size={10} /> Scientific 3D not connected</Badge>
+        <Badge
+          tone={scientificStatus === "ready" ? "green" : scientificStatus === "error" ? "amber" : "muted"}
+          data-testid="scientific-status"
+        >
+          <Database size={10} /> {scientificStatus === "ready" ? "3D Field · Reference MCNP" : scientificStatus === "error" ? "3D Field · Unavailable" : "3D Field · Loading"}
+        </Badge>
         <div className="case-select" aria-label="Nearest simulation case">
           <Hexagon size={13} />
           <span><small>NEAREST SIMULATION</small><strong data-testid="nearest-case">{prediction?.metadata.nearest_case ?? "--"}</strong></span>

@@ -18,6 +18,10 @@ test("every exposed interaction is functional, local-state, or explicitly unavai
     await new Promise((resolve) => setTimeout(resolve, 200));
     await route.continue();
   });
+  await page.route("**/scientific/**/values.f32", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    await route.continue();
+  });
   page.on("response", (response) => {
     if (response.url().endsWith("/models/blanket_unit_cell.glb")) glbResponseStatus = response.status();
   });
@@ -35,10 +39,32 @@ test("every exposed interaction is functional, local-state, or explicitly unavai
   expect(glbResponseStatus).toBe(200);
   await expect(page.getByText("Web CAD Geometry", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("GLB derived from STEP", { exact: true }).first()).toBeVisible();
-  await expect(page.getByText("Scientific 3D not connected", { exact: true })).toBeVisible();
   await expect(page.getByTestId("api-status")).toContainText("Twin API · Connected");
   await expect(page.getByTestId("kpi-total-tbr")).not.toHaveText("--");
   await expect(page.getByTestId("scalar-source")).toHaveText("Simulation");
+
+  // The local scientific path exposes its loading state and resolves independently.
+  await page.getByTestId("nav-neutronics").click();
+  await expect(page.getByRole("heading", { name: "Field controls" })).toBeVisible();
+  const scientificLoading = page.getByTestId("scientific-loading");
+  if (await scientificLoading.count()) await expect(scientificLoading).toContainText(/Loading|Validating/);
+  await expect(page.getByTestId("scientific-field-ready")).toBeAttached({ timeout: 15_000 });
+  await expect(page.getByTestId("scientific-status")).toContainText("3D Field · Reference MCNP");
+  await expect(page.getByTestId("scientific-scalar-bar")).toBeVisible();
+  await expect(page.getByTestId("scientific-scalar-bar")).toContainText("Total Nuclear Heating");
+  await expect(page.getByTestId("scientific-scalar-bar")).toContainText("W/cm³");
+  await expect(page.getByTestId("scientific-field-ready")).toHaveAttribute("data-cell-count", "1172380");
+  await expect(page.getByText("Loaded MCNP Simulation", { exact: true }).first()).toBeVisible();
+  const canvas = page.locator("canvas");
+  const canvasBounds = await canvas.boundingBox();
+  if (canvasBounds) {
+    await page.mouse.move(canvasBounds.x + canvasBounds.width * 0.55, canvasBounds.y + canvasBounds.height * 0.5);
+    await page.mouse.down();
+    await page.mouse.move(canvasBounds.x + canvasBounds.width * 0.62, canvasBounds.y + canvasBounds.height * 0.54, { steps: 4 });
+    await page.mouse.up();
+    await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
+  }
+  await page.getByTestId("nav-overview").click();
 
   // The real camera actions are enabled and each reports immediate feedback.
   await page.getByTestId("reset-camera").click();
@@ -79,31 +105,35 @@ test("every exposed interaction is functional, local-state, or explicitly unavai
   await expect(page.getByTestId("scalar-source")).toHaveText("Surrogate Prediction");
   await expect(page.getByTestId("kpi-total-tbr")).not.toHaveText(exactTotalTbr ?? "1.12856");
 
-  // Design -> Neutronics and every mock display control produces visible feedback.
+  // Design -> Neutronics; only the real Nuclear Heating Z-slice controls are active.
   await page.getByTestId("nav-neutronics").click();
   await expect(page.getByRole("heading", { name: "Field controls" })).toBeVisible();
-  await page.getByTestId("field-selector").selectOption("neutron_flux");
-  await expect(page.getByTestId("viewport-state")).toContainText("Neutron Flux");
-  await page.getByTestId("field-selector").selectOption("photon_flux");
-  await expect(page.getByTestId("viewport-state")).toContainText("Photon Flux");
+  await expect(page.getByTestId("field-selector")).toBeDisabled();
+  await expect(page.getByTestId("field-selector")).toHaveValue("nuclear_heating");
+  await expect(page.getByTestId("viewport-state")).toContainText("Total Nuclear Heating");
+  await expect(page.getByTestId("mode-iso-surface")).toBeDisabled();
+  await expect(page.getByTestId("axis-x")).toBeDisabled();
+  await expect(page.getByTestId("axis-y")).toBeDisabled();
+  await expect(page.getByTestId("log-scale")).toBeDisabled();
+
+  const initialLayer = await page.getByTestId("scientific-field-ready").getAttribute("data-z-layer");
+  const initialBounds = await page.getByTestId("scientific-field-ready").getAttribute("data-z-layer-bounds");
+  await page.getByRole("slider", { name: "Z position" }).press("End");
+  await expect(page.getByTestId("scientific-field-ready")).not.toHaveAttribute("data-z-layer", initialLayer ?? "");
+  await expect(page.getByTestId("scientific-field-ready")).not.toHaveAttribute("data-z-layer-bounds", initialBounds ?? "");
+  await expect(page.getByTestId("preview-status")).toContainText("layer");
+  await expect(page.getByTestId("scientific-scalar-bar")).toContainText("Z layer");
 
   await page.getByTestId("mode-off").click();
-  await expect(page.getByTestId("preview-status")).toContainText("Photon Flux · display off");
+  await expect(page.getByTestId("preview-status")).toContainText("Total Nuclear Heating · display off");
+  await expect(page.getByTestId("scientific-scalar-bar")).toBeHidden();
+  await expect(page.getByTestId("scientific-field-ready")).toHaveAttribute("data-visible", "false");
+  await expect(page.getByTestId("geometry-ready")).toBeAttached();
   await page.getByTestId("mode-slice").click();
-  await expect(page.getByTestId("preview-status")).toContainText("Slice · Z · 420 mm · Linear");
-  await page.getByTestId("mode-iso-surface").click();
-  await expect(page.getByTestId("preview-status")).toContainText("Iso-surface · Z · 420 mm · Linear");
-
-  for (const axis of ["x", "y", "z"] as const) {
-    await page.getByTestId(`axis-${axis}`).click();
-    await expect(page.getByTestId(`axis-${axis}`)).toHaveAttribute("data-state", "on");
-  }
-  await page.getByRole("slider", { name: "Z position" }).press("End");
-  await expect(page.getByTestId("preview-status")).toContainText("Z · 921 mm");
-  await page.getByTestId("log-scale").check();
-  await expect(page.getByTestId("preview-status")).toContainText("Log");
-  await page.getByTestId("log-scale").uncheck();
-  await expect(page.getByTestId("preview-status")).toContainText("Linear");
+  await expect(page.getByTestId("scientific-scalar-bar")).toBeVisible();
+  await expect(page.getByTestId("scientific-field-ready")).toHaveAttribute("data-visible", "true");
+  await expect(page.getByTestId("preview-status")).toContainText("reference MCNP simulation");
+  await expect(page.getByTestId("scalar-source")).toHaveText("Surrogate Prediction");
 
   // Component selection and visibility update both the preview and selected-component panel.
   await page.getByTestId("component-armor").click();
@@ -149,6 +179,48 @@ test("a missing geometry asset fails clearly without crashing the workspace", as
   await expect(page.getByTestId("nav-design")).toBeEnabled();
 });
 
+test("reports lightweight real scientific load and interaction timings", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByTestId("geometry-ready")).toBeAttached({ timeout: 15_000 });
+  await expect(page.getByTestId("scientific-field-ready")).toBeAttached({ timeout: 15_000 });
+  await page.getByTestId("nav-neutronics").click();
+  await expect(page.getByTestId("scientific-scalar-bar")).toBeVisible();
+  await expect(page.getByTestId("scientific-field-ready")).not.toHaveAttribute("data-render-ms", "unknown");
+  const beforeLayer = await page.getByTestId("scientific-field-ready").getAttribute("data-z-layer");
+  await page.getByRole("slider", { name: "Z position" }).press("Home");
+  await expect(page.getByTestId("scientific-field-ready")).not.toHaveAttribute("data-z-layer", beforeLayer ?? "");
+  const measureFrameCadence = () => page.evaluate(() => new Promise<{ meanMs: number; maxMs: number }>((resolve) => {
+    const intervals: number[] = [];
+    let previous = performance.now();
+    const sample = (now: number) => {
+      intervals.push(now - previous);
+      previous = now;
+      if (intervals.length === 20) resolve({
+        meanMs: intervals.reduce((sum, value) => sum + value, 0) / intervals.length,
+        maxMs: Math.max(...intervals),
+      });
+      else requestAnimationFrame(sample);
+    };
+    requestAnimationFrame(sample);
+  }));
+  const sliceFrameCadence = await measureFrameCadence();
+  await page.getByTestId("mode-off").click();
+  await expect(page.getByTestId("scientific-field-ready")).toHaveAttribute("data-visible", "false");
+  const cadOnlyFrameCadence = await measureFrameCadence();
+  const metrics = await page.getByTestId("scientific-field-ready").evaluate((element) => ({
+    metadataMs: element.getAttribute("data-metadata-ms"),
+    geometryValidationMs: element.getAttribute("data-geometry-validation-ms"),
+    scalarDownloadMs: element.getAttribute("data-scalar-download-ms"),
+    scalarParseMs: element.getAttribute("data-scalar-parse-ms"),
+    totalMs: element.getAttribute("data-load-ms"),
+    firstRenderMs: element.getAttribute("data-render-ms"),
+    sliceUpdateMs: element.getAttribute("data-slice-update-ms"),
+  }));
+  const cadenceRatio = sliceFrameCadence.meanMs / cadOnlyFrameCadence.meanMs;
+  console.log("SCIENTIFIC_PERFORMANCE", { ...metrics, sliceFrameCadence, cadOnlyFrameCadence, cadenceRatio });
+  expect(cadenceRatio).toBeLessThan(1.5);
+});
+
 test("an unavailable Python API does not crash or disable the Web CAD viewport", async ({ page }) => {
   await page.route("http://127.0.0.1:8000/api/**", (route) => route.abort("connectionrefused"));
   await page.goto("/");
@@ -158,4 +230,25 @@ test("an unavailable Python API does not crash or disable the Web CAD viewport",
   await expect(page.getByTestId("reset-camera")).toBeEnabled();
   await page.getByTestId("reset-camera").click();
   await expect(page.getByTestId("preview-status")).toContainText("Camera reset to engineering view");
+});
+
+test("a missing scientific asset does not crash the real GLB or Twin API", async ({ page }) => {
+  const consoleErrors: string[] = [];
+  const pageErrors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") consoleErrors.push(message.text());
+  });
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  await page.route("**/scientific/**/manifest.json", (route) => route.fulfill({ status: 204 }));
+  await page.goto("/");
+  await expect(page.getByTestId("api-status")).toContainText("Twin API · Connected");
+  await expect(page.getByTestId("geometry-ready")).toBeAttached({ timeout: 15_000 });
+  await page.getByTestId("nav-neutronics").click();
+  await expect(page.getByTestId("scientific-error")).toContainText("Scientific field asset unavailable");
+  await expect(page.getByTestId("scientific-error")).toContainText("CAD and scalar Twin API remain independent");
+  await expect(page.getByTestId("reset-camera")).toBeEnabled();
+  await page.getByTestId("reset-camera").click();
+  await expect(page.getByTestId("geometry-ready")).toBeAttached();
+  expect(consoleErrors, `browser console errors:\n${consoleErrors.join("\n")}`).toEqual([]);
+  expect(pageErrors, `uncaught page errors:\n${pageErrors.join("\n")}`).toEqual([]);
 });
