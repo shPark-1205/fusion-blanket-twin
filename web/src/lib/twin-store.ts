@@ -68,6 +68,10 @@ interface TwinUiState {
   componentVisibility: Record<ComponentId, boolean>;
   componentOpacity: Record<ComponentId, number>;
   scientificSliceOpacity: number;
+  sectionViewEnabled: boolean;
+  sectionViewAxis: SliceAxis;
+  sectionViewPositionMm: number;
+  sectionViewFlip: boolean;
   cameraCommand: CameraCommand;
   initializeTwinApi: () => Promise<void>;
   initializeScientificField: () => Promise<void>;
@@ -88,6 +92,10 @@ interface TwinUiState {
   toggleComponent: (id: ComponentId) => void;
   setComponentOpacity: (id: ComponentId, opacity: number) => void;
   setScientificSliceOpacity: (opacity: number) => void;
+  setSectionViewEnabled: (enabled: boolean) => void;
+  setSectionViewAxis: (axis: SliceAxis) => void;
+  setSectionViewPosition: (positionMm: number) => void;
+  setSectionViewFlip: (flip: boolean) => void;
   requestCamera: (action: CameraCommand["action"]) => void;
 }
 
@@ -129,6 +137,10 @@ export const useTwinStore = create<TwinUiState>((set, get) => ({
   ) as Record<ComponentId, boolean>,
   componentOpacity: { armor: 1, breeder: 1, multiplier: 1, structure: 1, coolant: 1 },
   scientificSliceOpacity: 1,
+  sectionViewEnabled: false,
+  sectionViewAxis: "Z",
+  sectionViewPositionMm: 460.5,
+  sectionViewFlip: false,
   cameraCommand: { action: "reset", sequence: 0 },
   initializeTwinApi: () => {
     initializationPromise ??= initializeTwinState();
@@ -269,6 +281,10 @@ export const useTwinStore = create<TwinUiState>((set, get) => ({
     componentOpacity: { ...state.componentOpacity, [id]: Math.max(0.15, Math.min(1, opacity)) },
   })),
   setScientificSliceOpacity: (opacity) => set({ scientificSliceOpacity: Math.max(0.25, Math.min(1, opacity)) }),
+  setSectionViewEnabled: (sectionViewEnabled) => set({ sectionViewEnabled }),
+  setSectionViewAxis: (sectionViewAxis) => set({ sectionViewAxis }),
+  setSectionViewPosition: (sectionViewPositionMm) => set({ sectionViewPositionMm }),
+  setSectionViewFlip: (sectionViewFlip) => set({ sectionViewFlip }),
   requestCamera: (action) => set((state) => ({ cameraCommand: { action, sequence: state.cameraCommand.sequence + 1 } })),
 }));
 

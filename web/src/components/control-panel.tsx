@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { BLANKET_GEOMETRY_ADAPTER } from "@/lib/blanket-geometry";
 import { mockTwinState } from "@/lib/mock-twin-state";
 import { useTwinStore } from "@/lib/twin-store";
 import type { ScientificFieldId, SliceAxis, VisualizationMode } from "@/lib/twin-types";
@@ -113,6 +114,69 @@ function ComponentDisplayControls() {
           <small>{visibility[component.id] ? "Visible" : "Hidden"}</small>
         </div>
       ))}
+    </div>
+  );
+}
+
+function GeometrySectionControls() {
+  const enabled = useTwinStore((state) => state.sectionViewEnabled);
+  const axis = useTwinStore((state) => state.sectionViewAxis);
+  const positionMm = useTwinStore((state) => state.sectionViewPositionMm);
+  const flip = useTwinStore((state) => state.sectionViewFlip);
+  const geometryBounds = useTwinStore((state) => state.geometry?.bounds_mm ?? null);
+  const setEnabled = useTwinStore((state) => state.setSectionViewEnabled);
+  const setAxis = useTwinStore((state) => state.setSectionViewAxis);
+  const setPosition = useTwinStore((state) => state.setSectionViewPosition);
+  const setFlip = useTwinStore((state) => state.setSectionViewFlip);
+  const fallbackBounds = [...BLANKET_GEOMETRY_ADAPTER.sourceBoundsMm.min, ...BLANKET_GEOMETRY_ADAPTER.sourceBoundsMm.max];
+  const bounds = geometryBounds?.length === 6 ? geometryBounds : fallbackBounds;
+  const axisIndex = axis === "X" ? 0 : axis === "Y" ? 1 : 2;
+  const minimum = geometryBounds?.length === 6 ? bounds[axisIndex * 2] : bounds[axisIndex];
+  const maximum = geometryBounds?.length === 6 ? bounds[axisIndex * 2 + 1] : bounds[axisIndex + 3];
+  const safeMinimum = Number.isFinite(minimum) ? minimum : fallbackBounds[axisIndex];
+  const safeMaximum = Number.isFinite(maximum) ? maximum : fallbackBounds[axisIndex + 3];
+  const clampedPosition = Math.min(safeMaximum, Math.max(safeMinimum, positionMm));
+  const step = Math.max((safeMaximum - safeMinimum) / 200, 0.1);
+  const handleAxisChange = (value: string) => {
+    if (!value) return;
+    const nextAxis = value as "X" | "Y" | "Z";
+    const nextIndex = nextAxis === "X" ? 0 : nextAxis === "Y" ? 1 : 2;
+    const nextMinimum = geometryBounds?.length === 6 ? bounds[nextIndex * 2] : bounds[nextIndex];
+    const nextMaximum = geometryBounds?.length === 6 ? bounds[nextIndex * 2 + 1] : bounds[nextIndex + 3];
+    setAxis(nextAxis);
+    setPosition((nextMinimum + nextMaximum) / 2);
+  };
+
+  return (
+    <div className="panel-section display-controls section-view-controls" data-testid="section-view-controls">
+      <div className="section-label">GEOMETRY SECTION VIEW</div>
+      <label className="switch-row">
+        <span><strong>Section View</strong><small>{enabled ? "CAD clipping active" : "CAD clipping off"}</small></span>
+        <input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} aria-label="Section View On / Off" data-testid="section-view-toggle" />
+        <i />
+      </label>
+      <div className="section-view-axis">
+        <div className="section-label">SECTION AXIS</div>
+        <ToggleGroup type="single" value={axis} onValueChange={handleAxisChange} className="segmented" data-testid="section-axis">
+          {(["X", "Y", "Z"] as const).map((item) => <ToggleGroupItem key={item} value={item} data-testid={`section-axis-${item.toLowerCase()}`}>{item}</ToggleGroupItem>)}
+        </ToggleGroup>
+      </div>
+      <ParameterControl
+        label="Section position"
+        value={clampedPosition}
+        min={safeMinimum}
+        max={safeMaximum}
+        step={step}
+        onChange={setPosition}
+        testId="section-position"
+        unit="mm"
+      />
+      <label className="switch-row section-flip-row">
+        <span><strong>Flip direction</strong><small>{flip ? "Keep the negative side" : "Keep the positive side"}</small></span>
+        <input type="checkbox" checked={flip} onChange={(event) => setFlip(event.target.checked)} aria-label="Flip section direction" data-testid="section-flip" />
+        <i />
+      </label>
+      <p className="control-help">Clips CAD geometry only. Open clipped surfaces do not receive generated cap faces.</p>
     </div>
   );
 }
@@ -455,6 +519,7 @@ export function ControlPanel() {
         {section === "thermal-hydraulics" && <ThermalControls />}
         {section === "performance" && <PerformanceControls />}
         {section !== "thermal-hydraulics" && <ComponentDisplayControls />}
+        {section !== "thermal-hydraulics" && <GeometrySectionControls />}
         {section === "neutronics" && <ScientificDisplayControls />}
       </div>
     </aside>

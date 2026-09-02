@@ -379,6 +379,127 @@ test("a missing scientific asset does not crash the real GLB or Twin API", async
   expect(pageErrors, `uncaught page errors:\n${pageErrors.join("\n")}`).toEqual([]);
 });
 
+test("geometry section view clips CAD independently from the scientific slice", async ({ page }) => {
+  const consoleErrors: string[] = [];
+  const pageErrors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") consoleErrors.push(message.text());
+  });
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+
+  await page.goto("/");
+  await expect(page.getByTestId("geometry-ready")).toBeAttached({ timeout: 15_000 });
+  await expect(page.getByTestId("section-view-controls")).toBeVisible();
+  await expect(page.getByTestId("section-view-toggle")).not.toBeChecked();
+  await expect(page.getByTestId("section-axis-z")).toHaveAttribute("data-state", "on");
+
+  const cameraBefore = await page.getByTestId("geometry-ready").getAttribute("data-camera-position");
+  const fieldPositionBefore = await page.getByTestId("scientific-field-ready").getAttribute("data-position-mm");
+  const sectionSlider = page.getByRole("slider", { name: "Section position" });
+  expect(Number(await sectionSlider.getAttribute("aria-valuemin"))).toBeLessThan(Number(await sectionSlider.getAttribute("aria-valuemax")));
+
+  await page.getByTestId("section-view-toggle").check();
+  await expect(page.getByTestId("geometry-ready")).toHaveAttribute("data-section-enabled", "true");
+  await expect(page.getByTestId("geometry-ready")).toHaveAttribute("data-clipping-plane-count", "1");
+  await expect(page.getByTestId("geometry-ready")).toHaveAttribute("data-section-plane-visible", "true");
+  await expect(page.getByTestId("geometry-ready")).toHaveAttribute("data-section-material-policy", "component-opacity-controlled");
+
+  await page.getByTestId("section-axis-x").click();
+  await expect(page.getByTestId("geometry-ready")).toHaveAttribute("data-section-axis", "X");
+  await expect(page.getByTestId("section-position-value")).toContainText("mm");
+  const xMinimum = await sectionSlider.getAttribute("aria-valuemin");
+  await page.getByRole("slider", { name: "Section position" }).press("Home");
+  const xPosition = await page.getByTestId("geometry-ready").getAttribute("data-section-position-mm");
+  expect(Number(xPosition)).toBeCloseTo(Number(xMinimum), 2);
+
+  await page.getByTestId("section-axis-y").click();
+  await expect(page.getByTestId("geometry-ready")).toHaveAttribute("data-section-axis", "Y");
+  await page.getByRole("slider", { name: "Section position" }).press("End");
+  const yPosition = await page.getByTestId("geometry-ready").getAttribute("data-section-position-mm");
+  expect(Number(yPosition)).toBeCloseTo(Number(await page.getByRole("slider", { name: "Section position" }).getAttribute("aria-valuemax")), 2);
+
+  await page.getByTestId("section-axis-z").click();
+  await expect(page.getByTestId("geometry-ready")).toHaveAttribute("data-section-axis", "Z");
+  await page.getByTestId("section-flip").check();
+  await expect(page.getByTestId("geometry-ready")).toHaveAttribute("data-section-flip", "true");
+  await expect(page.getByTestId("geometry-ready")).toHaveAttribute("data-clipping-plane-count", "1");
+  await expect(page.getByTestId("geometry-ready")).toHaveAttribute("data-camera-position", cameraBefore!);
+
+  await page.getByTestId("opacity-slider-breeder").press("Home");
+  await expect(page.getByTestId("geometry-group-breeder")).toHaveAttribute("data-visible", "true");
+
+  await page.getByTestId("nav-neutronics").click();
+  await expect(page.getByTestId("scientific-scalar-bar")).toBeVisible();
+  await page.getByTestId("section-axis-x").click();
+  await page.getByRole("slider", { name: "Section position" }).press("End");
+  await expect(page.getByTestId("geometry-ready")).toHaveAttribute("data-section-axis", "X");
+  await expect(page.getByTestId("scientific-field-ready")).toHaveAttribute("data-position-mm", fieldPositionBefore!);
+  await page.getByTestId("mode-off").click();
+  await expect(page.getByTestId("scientific-field-ready")).toHaveAttribute("data-visible", "false");
+  await expect(page.getByTestId("geometry-ready")).toHaveAttribute("data-section-enabled", "true");
+
+  await page.getByTestId("section-view-toggle").uncheck();
+  await expect(page.getByTestId("geometry-ready")).toHaveAttribute("data-clipping-plane-count", "0");
+  await expect(page.getByTestId("geometry-ready")).toHaveAttribute("data-section-plane-visible", "false");
+  expect(consoleErrors, `browser console errors:\n${consoleErrors.join("\n")}`).toEqual([]);
+  expect(pageErrors, `uncaught page errors:\n${pageErrors.join("\n")}`).toEqual([]);
+});
+
+test("geometry section view remains available on the GLB fallback", async ({ page }) => {
+  await page.route("**/api/geometry/design", (route) => route.abort("connectionrefused"));
+  await page.goto("/");
+  await expect(page.getByTestId("geometry-ready")).toBeAttached({ timeout: 15_000 });
+  await expect(page.getByTestId("geometry-ready")).toHaveAttribute("data-geometry-source", "glb");
+  await expect(page.getByTestId("section-view-controls")).toBeVisible();
+  await page.getByTestId("section-view-toggle").check();
+  await expect(page.getByTestId("geometry-ready")).toHaveAttribute("data-clipping-plane-count", "1");
+  await page.getByTestId("section-axis-y").click();
+  await expect(page.getByTestId("geometry-ready")).toHaveAttribute("data-section-axis", "Y");
+  await expect(page.getByTestId("reset-camera")).toBeEnabled();
+});
+
+test("geometry section interactions preserve page and canvas layout", async ({ page }) => {
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await page.goto("/");
+  await expect(page.getByTestId("geometry-ready")).toBeAttached({ timeout: 15_000 });
+
+  const readLayout = () => page.evaluate(() => {
+    const viewport = document.querySelector('[data-testid="geometry-viewport"]')?.getBoundingClientRect();
+    const canvas = document.querySelector("canvas")?.getBoundingClientRect();
+    if (!viewport || !canvas) throw new Error("Geometry viewport or canvas is missing");
+    return {
+      scrollY: window.scrollY,
+      viewport: { x: viewport.x, y: viewport.y, width: viewport.width, height: viewport.height },
+      canvas: { x: canvas.x, y: canvas.y, width: canvas.width, height: canvas.height },
+      viewportBottom: viewport.bottom,
+      innerHeight: window.innerHeight,
+    };
+  });
+  const initial = await readLayout();
+  const expectStableLayout = async () => {
+    const next = await readLayout();
+    expect(next.scrollY).toBe(initial.scrollY);
+    for (const key of ["x", "y", "width", "height"] as const) {
+      expect(Math.abs(next.viewport[key] - initial.viewport[key])).toBeLessThan(1);
+      expect(Math.abs(next.canvas[key] - initial.canvas[key])).toBeLessThan(1);
+    }
+    expect(next.viewportBottom).toBeLessThanOrEqual(next.innerHeight + 1);
+  };
+
+  const sectionToggle = page.getByTestId("section-view-toggle");
+  const sectionFlip = page.getByTestId("section-flip");
+  const sectionPosition = page.getByTestId("section-position");
+  const cameraBefore = await page.getByTestId("geometry-ready").getAttribute("data-camera-position");
+
+  await sectionToggle.check();
+  await expectStableLayout();
+  await sectionFlip.check();
+  await expectStableLayout();
+  await sectionPosition.press("Home");
+  await expectStableLayout();
+  await expect(page.getByTestId("geometry-ready")).toHaveAttribute("data-camera-position", cameraBefore ?? "");
+});
+
 test("the engineering workspace remains readable and unclipped at target desktop resolutions", async ({ page }) => {
   const resolutions = [
     { width: 1366, height: 768 },
@@ -397,6 +518,7 @@ test("the engineering workspace remains readable and unclipped at target desktop
     expect(viewportBox?.width).toBeGreaterThan(500);
     await expect(page.getByTestId("kpi-total-tbr")).toBeVisible();
     await expect(page.getByTestId("component-display-controls")).toBeVisible();
+    await expect(page.getByTestId("section-view-controls")).toBeVisible();
     for (const component of ["armor", "breeder", "multiplier", "structure", "coolant"]) {
       await expect(page.getByTestId(`opacity-slider-${component}`)).toBeVisible();
     }

@@ -7,6 +7,7 @@ import type { CameraState, GeometryReadyMetrics } from "@/components/blanket-thr
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { BLANKET_GEOMETRY_ADAPTER } from "@/lib/blanket-geometry";
 import { mockTwinState } from "@/lib/mock-twin-state";
 import { useTwinStore } from "@/lib/twin-store";
 import { SCIENTIFIC_COLOR_GRADIENT, SCIENTIFIC_ZERO_COLOR, scalarDomain, selectedLayer } from "@/lib/scientific-field";
@@ -33,6 +34,10 @@ export function BlanketViewport() {
   const slicePositions = useTwinStore((state) => state.slicePositions);
   const geometryStatus = useTwinStore((state) => state.geometryStatus);
   const geometry = useTwinStore((state) => state.geometry);
+  const sectionViewEnabled = useTwinStore((state) => state.sectionViewEnabled);
+  const sectionViewAxis = useTwinStore((state) => state.sectionViewAxis);
+  const sectionViewPositionMm = useTwinStore((state) => state.sectionViewPositionMm);
+  const sectionViewFlip = useTwinStore((state) => state.sectionViewFlip);
   const hasParametricGeometry = geometry !== null;
   const visibility = useTwinStore((state) => state.componentVisibility);
   const selectedComponentId = useTwinStore((state) => state.selectedComponentId);
@@ -48,6 +53,14 @@ export function BlanketViewport() {
   const scientificLayer = scientificField ? selectedLayer(scientificField.manifest, axis, slicePositions[axis]) : null;
   const scientificLayerIndex = scientificLayer?.index ?? null;
   const activeRecord = scientificField?.manifest.fields[fieldId] ?? null;
+  const sectionBounds = geometry?.bounds_mm?.length === 6
+    ? geometry.bounds_mm
+    : [...BLANKET_GEOMETRY_ADAPTER.sourceBoundsMm.min, ...BLANKET_GEOMETRY_ADAPTER.sourceBoundsMm.max];
+  const sectionAxisIndex = sectionViewAxis === "X" ? 0 : sectionViewAxis === "Y" ? 1 : 2;
+  const sectionBoundsIndex = geometry?.bounds_mm?.length === 6 ? sectionAxisIndex * 2 : sectionAxisIndex;
+  const sectionMinimum = sectionBounds[sectionBoundsIndex];
+  const sectionMaximum = geometry?.bounds_mm?.length === 6 ? sectionBounds[sectionBoundsIndex + 1] : sectionBounds[sectionAxisIndex + 3];
+  const sectionPosition = Math.min(sectionMaximum, Math.max(sectionMinimum, sectionViewPositionMm));
   const scaleLabel = log ? "Log" : "Linear";
   const scalarTicks = activeRecord
     ? Array.from({ length: 5 }, (_, index) => {
@@ -180,10 +193,17 @@ export function BlanketViewport() {
           data-camera-position={cameraState?.position.map((value) => value.toFixed(4)).join(",") ?? "unknown"}
           data-camera-target={cameraState?.target.map((value) => value.toFixed(4)).join(",") ?? "unknown"}
           data-camera-up={cameraState?.up.map((value) => value.toFixed(4)).join(",") ?? "unknown"}
-          data-geometry-source={hasParametricGeometry ? "parametric-csg" : "glb"}
-          data-primary-geometry-root-count="1"
-          data-component-count={metrics.meshes}
-        >
+           data-geometry-source={hasParametricGeometry ? "parametric-csg" : "glb"}
+           data-primary-geometry-root-count="1"
+           data-component-count={metrics.meshes}
+           data-section-enabled={sectionViewEnabled}
+           data-section-axis={sectionViewAxis}
+           data-section-position-mm={sectionPosition.toFixed(2)}
+           data-section-flip={sectionViewFlip}
+           data-clipping-plane-count={sectionViewEnabled ? "1" : "0"}
+           data-section-plane-visible={sectionViewEnabled}
+           data-section-material-policy="component-opacity-controlled"
+         >
           {mockTwinState.components.map((component) => (
             <span key={component.id} data-testid={`geometry-group-${component.id}`} data-visible={visibility[component.id]} data-selected={selectedComponentId === component.id} data-mesh-count={metrics.groups[component.id]} />
           ))}

@@ -70,6 +70,102 @@ function countTriangles(geometry: THREE.BufferGeometry) {
   return Math.floor(elements / 3);
 }
 
+type DisplayBoundsMm = [number, number, number, number, number, number];
+
+function displayBoundsMm(bounds: readonly number[] | null): DisplayBoundsMm {
+  const fallback = [...BLANKET_GEOMETRY_ADAPTER.sourceBoundsMm.min, ...BLANKET_GEOMETRY_ADAPTER.sourceBoundsMm.max];
+  if (bounds?.length !== 6) return fallback as DisplayBoundsMm;
+  return [
+    Number.isFinite(bounds[0]) ? bounds[0] : fallback[0],
+    Number.isFinite(bounds[1]) ? bounds[1] : fallback[3],
+    Number.isFinite(bounds[2]) ? bounds[2] : fallback[1],
+    Number.isFinite(bounds[3]) ? bounds[3] : fallback[4],
+    Number.isFinite(bounds[4]) ? bounds[4] : fallback[2],
+    Number.isFinite(bounds[5]) ? bounds[5] : fallback[5],
+  ];
+}
+
+function sectionBoundsMm(bounds: readonly number[] | null, axis: SliceAxis): [number, number] {
+  const values = displayBoundsMm(bounds);
+  const index = axis === "X" ? 0 : axis === "Y" ? 1 : 2;
+  const minimum = values[index * 2];
+  const maximum = values[index * 2 + 1];
+  return [Math.min(minimum, maximum), Math.max(minimum, maximum)];
+}
+
+function SectionPlaneMarker({
+  boundsMm,
+  axis,
+  positionMm,
+}: {
+  boundsMm: DisplayBoundsMm;
+  axis: SliceAxis;
+  positionMm: number;
+}) {
+  const marker = useMemo(() => {
+    const scale = BLANKET_GEOMETRY_ADAPTER.sourceToSceneScale;
+    const x0 = boundsMm[0] * scale;
+    const x1 = boundsMm[1] * scale;
+    const y0 = boundsMm[2] * scale;
+    const y1 = boundsMm[3] * scale;
+    const z0 = boundsMm[4] * scale;
+    const z1 = boundsMm[5] * scale;
+    const position = positionMm * scale;
+    if (axis === "X") {
+      return {
+        size: [Math.max(y1 - y0, 0.001), Math.max(z1 - z0, 0.001)] as [number, number],
+        position: [position, (y0 + y1) / 2, (z0 + z1) / 2] as [number, number, number],
+        rotation: [0, Math.PI / 2, 0] as [number, number, number],
+        corners: [[position, y0, z0], [position, y1, z0], [position, y1, z1], [position, y0, z1]],
+      };
+    }
+    if (axis === "Y") {
+      return {
+        size: [Math.max(x1 - x0, 0.001), Math.max(z1 - z0, 0.001)] as [number, number],
+        position: [(x0 + x1) / 2, position, (z0 + z1) / 2] as [number, number, number],
+        rotation: [Math.PI / 2, 0, 0] as [number, number, number],
+        corners: [[x0, position, z0], [x1, position, z0], [x1, position, z1], [x0, position, z1]],
+      };
+    }
+    return {
+      size: [Math.max(x1 - x0, 0.001), Math.max(y1 - y0, 0.001)] as [number, number],
+      position: [(x0 + x1) / 2, (y0 + y1) / 2, position] as [number, number, number],
+      rotation: [0, 0, 0] as [number, number, number],
+      corners: [[x0, y0, position], [x1, y0, position], [x1, y1, position], [x0, y1, position]],
+    };
+  }, [axis, boundsMm, positionMm]);
+  const outlinePositions = useMemo(() => {
+    const positions = new Float32Array(12);
+    marker.corners.forEach(([x, y, z], index) => {
+      positions[index * 3] = x;
+      positions[index * 3 + 1] = y;
+      positions[index * 3 + 2] = z;
+    });
+    return positions;
+  }, [marker.corners]);
+
+  return (
+    <>
+      <mesh
+        position={marker.position}
+        rotation={marker.rotation}
+        renderOrder={7}
+        raycast={() => null}
+        userData={{ sectionPlaneMarker: true, sectionAxis: axis }}
+      >
+        <planeGeometry args={marker.size} />
+        <meshBasicMaterial color="#d99a4c" transparent opacity={0.14} depthTest={false} depthWrite={false} side={THREE.DoubleSide} toneMapped={false} />
+      </mesh>
+      <lineLoop renderOrder={8} raycast={() => null}>
+        <bufferGeometry>
+          <bufferAttribute attach="attributes-position" args={[outlinePositions, 3]} />
+        </bufferGeometry>
+        <lineBasicMaterial color="#f0b866" transparent opacity={0.92} depthTest={false} depthWrite={false} toneMapped={false} />
+      </lineLoop>
+    </>
+  );
+}
+
 function ScientificSlice() {
   const section = useTwinStore((state) => state.section);
   const mode = useTwinStore((state) => state.visualizationMode);
@@ -452,6 +548,10 @@ function BlanketModel({ cameraCommand, onReady, onError, onCameraState }: SceneP
   const section = useTwinStore((state) => state.section);
   const visualizationMode = useTwinStore((state) => state.visualizationMode);
   const geometry = useTwinStore((state) => state.geometry);
+  const sectionViewEnabled = useTwinStore((state) => state.sectionViewEnabled);
+  const sectionViewAxis = useTwinStore((state) => state.sectionViewAxis);
+  const sectionViewPositionMm = useTwinStore((state) => state.sectionViewPositionMm);
+  const sectionViewFlip = useTwinStore((state) => state.sectionViewFlip);
   const selectComponent = useTwinStore((state) => state.selectComponent);
   const { invalidate } = useThree();
 
@@ -459,6 +559,26 @@ function BlanketModel({ cameraCommand, onReady, onError, onCameraState }: SceneP
     geometry ? buildParametricModel(geometry) : null
   ), [geometry]);
   const displayModel = parametricModel ?? model;
+  const clippingPlane = useMemo(() => {
+    if (!sectionViewEnabled) return null;
+    const [minimum, maximum] = sectionBoundsMm(geometry?.bounds_mm ?? null, sectionViewAxis);
+    const positionMm = Math.min(maximum, Math.max(minimum, sectionViewPositionMm));
+    const normal = sectionViewAxis === "X"
+      ? new THREE.Vector3(sectionViewFlip ? -1 : 1, 0, 0)
+      : sectionViewAxis === "Y"
+        ? new THREE.Vector3(0, sectionViewFlip ? -1 : 1, 0)
+        : new THREE.Vector3(0, 0, sectionViewFlip ? -1 : 1);
+    const point = normal.clone().multiplyScalar(positionMm * BLANKET_GEOMETRY_ADAPTER.sourceToSceneScale);
+    return new THREE.Plane(normal, -normal.dot(point));
+  }, [geometry, sectionViewAxis, sectionViewEnabled, sectionViewFlip, sectionViewPositionMm]);
+  const sectionDisplayBoundsMm = useMemo(
+    () => displayBoundsMm(geometry?.bounds_mm ?? null),
+    [geometry],
+  );
+  const sectionDisplayPositionMm = useMemo(() => {
+    const [minimum, maximum] = sectionBoundsMm(geometry?.bounds_mm ?? null, sectionViewAxis);
+    return Math.min(maximum, Math.max(minimum, sectionViewPositionMm));
+  }, [geometry, sectionViewAxis, sectionViewPositionMm]);
 
   useEffect(() => {
     if (!parametricModel) return;
@@ -546,12 +666,14 @@ function BlanketModel({ cameraCommand, onReady, onError, onCameraState }: SceneP
       material.depthTest = true;
       material.depthWrite = opacity[group] >= 0.999 || opacity[group] > 0.82;
       material.side = THREE.FrontSide;
+      material.clippingPlanes = clippingPlane ? [clippingPlane] : [];
+      material.clipIntersection = false;
       material.emissive.set(group === selected ? appearance.color : "#000000");
       material.emissiveIntensity = group === selected ? 0.2 : group === hovered?.group ? 0.07 : 0;
       material.needsUpdate = true;
     });
     invalidate();
-  }, [displayModel, hovered, invalidate, opacity, selected, visibility]);
+  }, [clippingPlane, displayModel, hovered, invalidate, opacity, selected, visibility]);
 
   useEffect(() => () => {
     model?.traverse((object) => {
@@ -595,6 +717,13 @@ function BlanketModel({ cameraCommand, onReady, onError, onCameraState }: SceneP
             setHovered(null);
             document.body.style.cursor = "";
           }}
+        />
+      )}
+      {sectionViewEnabled && displayModel && (
+        <SectionPlaneMarker
+          boundsMm={sectionDisplayBoundsMm}
+          axis={sectionViewAxis}
+          positionMm={sectionDisplayPositionMm}
         />
       )}
       <ScientificSlice />
@@ -645,6 +774,7 @@ export function BlanketThreeScene(props: SceneProps) {
       onCreated={({ gl }) => {
         gl.toneMapping = THREE.NoToneMapping;
         gl.outputColorSpace = THREE.SRGBColorSpace;
+        gl.localClippingEnabled = true;
       }}
       onPointerMissed={() => { document.body.style.cursor = ""; }}
     >
