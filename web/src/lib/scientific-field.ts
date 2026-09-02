@@ -402,8 +402,9 @@ export function scalarDomain(field: ScientificFieldRecord, scale: ScaleMode): [n
 }
 
 export function colorScalarValue(value: number, field: ScientificFieldRecord, scale: ScaleMode): [number, number, number] {
+  if (value <= 0) return ZERO_CELL_COLOR;
   if (scale === "log") {
-    if (!field.log_scale_supported || field.positive_minimum === null || value <= 0) return sequentialColor(0);
+    if (!field.log_scale_supported || field.positive_minimum === null) return ZERO_CELL_COLOR;
     const domain = scalarDomain(field, "log");
     return sequentialColor(normalize(Math.log10(value), domain));
   }
@@ -411,15 +412,19 @@ export function colorScalarValue(value: number, field: ScientificFieldRecord, sc
 }
 
 export const SCIENTIFIC_COLOR_GRADIENT =
-  "linear-gradient(to top, rgb(5 16 38), rgb(42 56 115), rgb(28 111 133), rgb(62 157 122), rgb(194 183 79), rgb(252 244 181))";
+  "linear-gradient(to top, rgb(68 1 84), rgb(65 68 135), rgb(42 120 142), rgb(34 168 132), rgb(122 209 81), rgb(253 231 37))";
+
+export const SCIENTIFIC_ZERO_COLOR = "rgb(38 50 58)";
+
+const ZERO_CELL_COLOR: [number, number, number] = [38 / 255, 50 / 255, 58 / 255];
 
 const COLOR_STOPS = [
-  [0, 5, 16, 38],
-  [0.22, 42, 56, 115],
-  [0.44, 28, 111, 133],
-  [0.66, 62, 157, 122],
-  [0.84, 194, 183, 79],
-  [1, 252, 244, 181],
+  [0, 68, 1, 84],
+  [0.2, 65, 68, 135],
+  [0.4, 42, 120, 142],
+  [0.6, 34, 168, 132],
+  [0.8, 122, 209, 81],
+  [1, 253, 231, 37],
 ] as const;
 
 function normalize(value: number, range: [number, number]) {

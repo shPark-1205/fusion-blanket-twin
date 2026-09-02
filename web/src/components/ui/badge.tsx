@@ -9,7 +9,7 @@ export function Badge({
   return (
     <span
       className={cn(
-        "inline-flex h-5 items-center rounded-[3px] border px-1.5 font-mono text-[9px] font-semibold uppercase tracking-[0.13em]",
+        "inline-flex h-6 items-center rounded-[3px] border px-2 font-mono text-[11px] font-semibold uppercase tracking-[0.1em]",
         tone === "neutral" && "border-[var(--line-strong)] bg-[var(--surface-2)] text-[var(--text-secondary)]",
         tone === "cyan" && "border-cyan-400/25 bg-cyan-400/8 text-[var(--accent-cyan)]",
         tone === "green" && "border-emerald-400/25 bg-emerald-400/8 text-[var(--status-ok)]",

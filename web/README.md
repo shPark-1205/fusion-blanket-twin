@@ -82,7 +82,7 @@ The blanket geometry at `public/models/blanket_unit_cell.glb` is a web presentat
 - The viewport uses real GLB presentation geometry with orbit, zoom, pan, picking, Reset Camera, Fit Assembly, and fullscreen behavior.
 - Semantic selection, visibility, and opacity update the already-loaded scene without reloading the GLB.
 - The displayed slice uses raw containing-voxel cell values without point interpolation. Its Float32 values are a documented visualization copy; the Float64 VTKHDF remains authoritative. Log display is visualization-only; zero cells use the below-positive-range color and raw values are unchanged.
-- Clicking the displayed slice performs a raw FMESH voxel probe by axis-boundary lookup, not ray-testing millions of cells. The probe reports i/j/k, physical cell bounds, center, all five canonical field values, and nuclear-heating closure.
+- Clicking the displayed slice performs a raw FMESH voxel probe by axis-boundary lookup, not ray-testing millions of cells. The probe reports i/j/k, physical cell bounds, center, and all five canonical field values. Nuclear Heating − (Neutron Heating + Photon Heating) is retained as a visually secondary numerical consistency check, not presented as an independent tally.
 - The loaded field is one fixed reference MCNP simulation. It never follows PZ/CZ scalar-surrogate design changes and is labeled accordingly.
 - Thermal-hydraulics is an explicitly unavailable workspace; no CFX data source is connected.
 - Illustrative plots are static and do not expose invented scientific values through hover interactions.

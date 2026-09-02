@@ -39,6 +39,7 @@ test("every exposed interaction is functional, local-state, or explicitly unavai
   expect(glbResponseStatus).toBe(200);
   await expect(page.getByText("Web CAD Geometry", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("GLB derived from STEP", { exact: true }).first()).toBeVisible();
+  await expect(page.locator(".geometry-provenance")).toHaveCount(0);
   await expect(page.getByTestId("api-status")).toContainText("Twin API · Connected");
   await expect(page.getByTestId("kpi-total-tbr")).not.toHaveText("--");
   await expect(page.getByTestId("scalar-source")).toHaveText("Simulation");
@@ -126,7 +127,7 @@ test("every exposed interaction is functional, local-state, or explicitly unavai
   await page.getByTestId("log-scale").check();
   await expect(page.getByTestId("scientific-field-ready")).toHaveAttribute("data-scale-mode", "log");
   await expect(page.getByTestId("scientific-scalar-bar")).toContainText("Log");
-  await expect(page.getByTestId("scientific-scalar-bar")).toContainText("Zero cells");
+  await expect(page.getByTestId("scientific-scalar-bar")).toContainText("Zero / nonpositive");
   const scalarDomain = await page.getByTestId("scientific-field-ready").getAttribute("data-scalar-domain");
   expect(scalarDomain).not.toContain("Infinity");
   expect(scalarDomain).not.toContain("NaN");
@@ -162,7 +163,13 @@ test("every exposed interaction is functional, local-state, or explicitly unavai
   await expect(page.getByTestId("probe-panel")).toContainText("Neutron Heating");
   await expect(page.getByTestId("probe-panel")).toContainText("Photon Heating");
   await expect(page.getByTestId("probe-panel")).toContainText("Total Nuclear Heating");
-  await expect(page.getByTestId("probe-panel")).toContainText("Heating closure");
+  await expect(page.getByTestId("probe-panel")).not.toContainText("Heating closure");
+  await expect(page.getByTestId("heating-consistency")).toContainText("Heating consistency");
+  await expect(page.getByTestId("heating-consistency")).toContainText("Residual:");
+  await expect(page.getByTestId("heating-consistency")).toHaveAttribute(
+    "title",
+    "Numerical consistency check: Nuclear Heating - (Neutron Heating + Photon Heating)",
+  );
   await expect(page.getByTestId("scientific-field-ready")).not.toHaveAttribute("data-probe-ms", "unknown");
 
   await page.getByTestId("axis-z").click();
@@ -342,4 +349,50 @@ test("a missing scientific asset does not crash the real GLB or Twin API", async
   await expect(page.getByTestId("geometry-ready")).toBeAttached();
   expect(consoleErrors, `browser console errors:\n${consoleErrors.join("\n")}`).toEqual([]);
   expect(pageErrors, `uncaught page errors:\n${pageErrors.join("\n")}`).toEqual([]);
+});
+
+test("the engineering workspace remains readable and unclipped at target desktop resolutions", async ({ page }) => {
+  const resolutions = [
+    { width: 1366, height: 768 },
+    { width: 1440, height: 900 },
+    { width: 1920, height: 1080 },
+  ];
+
+  for (const resolution of resolutions) {
+    await page.setViewportSize(resolution);
+    await page.goto("/");
+    await expect(page.getByTestId("geometry-ready")).toBeAttached({ timeout: 15_000 });
+    await expect(page.locator(".geometry-provenance")).toHaveCount(0);
+
+    const viewport = page.getByTestId("geometry-viewport");
+    const viewportBox = await viewport.boundingBox();
+    expect(viewportBox?.width).toBeGreaterThan(500);
+    await expect(page.getByTestId("kpi-total-tbr")).toBeVisible();
+
+    for (const section of ["overview", "design", "neutronics", "thermal-hydraulics", "performance"]) {
+      await page.getByTestId(`nav-${section}`).click();
+      await expect(page.getByTestId("control-panel")).toBeVisible();
+    }
+
+    await page.getByTestId("nav-neutronics").click();
+    await expect(page.getByTestId("scientific-scalar-bar")).toContainText("Total Nuclear Heating");
+    await expect(page.getByTestId("scientific-scalar-bar")).toContainText("W/cm³");
+    await expect(page.getByTestId("scientific-scalar-bar")).toContainText("Zero / nonpositive");
+
+    const readability = await page.evaluate(() => {
+      const fontSize = (selector: string) => Number.parseFloat(getComputedStyle(document.querySelector(selector)!).fontSize);
+      return {
+        body: fontSize("body"),
+        nav: fontSize(".nav-text"),
+        metric: fontSize(".metric-row > span"),
+        scalarTick: fontSize(".scalar-ticks"),
+        horizontalOverflow: document.documentElement.scrollWidth - window.innerWidth,
+      };
+    });
+    expect(readability.body).toBeGreaterThanOrEqual(14);
+    expect(readability.nav).toBeGreaterThanOrEqual(13);
+    expect(readability.metric).toBeGreaterThanOrEqual(12);
+    expect(readability.scalarTick).toBeGreaterThanOrEqual(12);
+    expect(readability.horizontalOverflow).toBeLessThanOrEqual(0);
+  }
 });

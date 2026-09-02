@@ -43,6 +43,8 @@ The second web-field milestone extends the same representation to the five canon
 
 Raw voxel probing is a boundary-search operation on the rectilinear axes. The convention is half-open intervals `[lower, upper)`, with the final upper boundary included in the final cell. For a visible slice, the selected axis index comes from the snapped slice layer and the other two indices come from the clicked position. This preserves MCNP cell-data semantics and avoids per-click ray testing against the full voxel volume.
 
+The browser uses an explicit Viridis sequential ramp for the five nonnegative quantities. Zero and nonpositive cells use a separate neutral graphite color, so they remain distinguishable from both the dark viewport and low-but-positive values. Linear and logarithmic modes transform only the color coordinate; raw probe values are unchanged. The probe presents Nuclear Heating − (Neutron Heating + Photon Heating) as a secondary numerical consistency residual rather than an additional physical tally.
+
 Arbitrary unstructured future meshes should use a server-side extraction path (C) or a purpose-built unstructured web pipeline rather than being coerced into this representation.
 
 ## Data and precision policy

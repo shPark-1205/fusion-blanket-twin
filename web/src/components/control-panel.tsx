@@ -283,10 +283,20 @@ function NeutronicsControls() {
             <MetricRow label="X interval" value={`${probe.boundsMm.x[0].toFixed(1)} – ${probe.boundsMm.x[1].toFixed(1)}`} unit="mm" />
             <MetricRow label="Y interval" value={`${probe.boundsMm.y[0].toFixed(1)} – ${probe.boundsMm.y[1].toFixed(1)}`} unit="mm" />
             <MetricRow label="Z interval" value={`${probe.boundsMm.z[0].toFixed(1)} – ${probe.boundsMm.z[1].toFixed(1)}`} unit="mm" />
+            <MetricRow label="Cell center" value={probe.centerMm.map((value) => value.toFixed(1)).join(", ")} unit="mm" />
+            <div className="probe-subheading">PHYSICAL QUANTITIES</div>
             {scientificField?.manifest.field_order.map((id) => (
               <MetricRow key={id} label={scientificField.manifest.fields[id].display_name} value={probe.values[id].toExponential(4)} unit={scientificField.manifest.fields[id].display_units} />
             ))}
-            <MetricRow label="Heating closure" value={probe.nuclearHeatingConsistency.difference.toExponential(3)} unit="W/cm³" />
+            <div
+              className="probe-validation"
+              data-testid="heating-consistency"
+              title="Numerical consistency check: Nuclear Heating - (Neutron Heating + Photon Heating)"
+            >
+              <span><Check size={13} /> Heating consistency</span>
+              <small>Residual: {probe.nuclearHeatingConsistency.difference.toExponential(3)} W/cm³</small>
+              <p>Nuclear Heating − (Neutron Heating + Photon Heating)</p>
+            </div>
           </>
         ) : probeStatus !== "loading" && probeStatus !== "error" ? (
           <>

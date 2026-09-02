@@ -10,7 +10,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { cn } from "@/lib/utils";
 import { mockTwinState } from "@/lib/mock-twin-state";
 import { useTwinStore } from "@/lib/twin-store";
-import { SCIENTIFIC_COLOR_GRADIENT, scalarDomain, selectedLayer } from "@/lib/scientific-field";
+import { SCIENTIFIC_COLOR_GRADIENT, SCIENTIFIC_ZERO_COLOR, scalarDomain, selectedLayer } from "@/lib/scientific-field";
 
 const BlanketThreeScene = dynamic(
   () => import("@/components/blanket-three-scene").then((module) => module.BlanketThreeScene),
@@ -93,9 +93,15 @@ export function BlanketViewport() {
   const activeRecord = scientificField?.manifest.fields[fieldId] ?? null;
   const scaleLabel = log ? "Log" : "Linear";
   const scalarTicks = activeRecord
-    ? log && activeRecord.positive_minimum !== null
-      ? [activeRecord.web_range[1], Math.sqrt(activeRecord.positive_minimum * activeRecord.web_range[1]), activeRecord.positive_minimum]
-      : [activeRecord.web_range[1], (activeRecord.web_range[0] + activeRecord.web_range[1]) / 2, activeRecord.web_range[0]]
+    ? Array.from({ length: 5 }, (_, index) => {
+        const fraction = 1 - index / 4;
+        if (log && activeRecord.positive_minimum !== null) {
+          const minimum = Math.log10(activeRecord.positive_minimum);
+          const maximum = Math.log10(activeRecord.web_range[1]);
+          return 10 ** (minimum + (maximum - minimum) * fraction);
+        }
+        return activeRecord.web_range[0] + (activeRecord.web_range[1] - activeRecord.web_range[0]) * fraction;
+      })
     : null;
 
   const handleReady = useCallback((readyMetrics: GeometryReadyMetrics) => {
@@ -202,24 +208,14 @@ export function BlanketViewport() {
             <div className="scalar-bar-body">
               <div className="scalar-gradient" style={{ background: SCIENTIFIC_COLOR_GRADIENT }} />
               <div className="scalar-ticks">
-                <span>{scalarTicks[0].toExponential(2)}</span>
-                <span>{scalarTicks[1].toExponential(2)}</span>
-                <span>{log ? `>=${scalarTicks[2].toExponential(1)}` : scalarTicks[2].toExponential(2)}</span>
+                {scalarTicks.map((tick, index) => <span key={`${tick}-${index}`}>{tick.toExponential(2)}</span>)}
               </div>
             </div>
+            <div className="scalar-zero-key"><i style={{ background: SCIENTIFIC_ZERO_COLOR }} /><span>Zero / nonpositive</span></div>
             <small>{scientificLayer ? `${axis} layer ${scientificLayer.bounds_mm[0].toFixed(1)}–${scientificLayer.bounds_mm[1].toFixed(1)} mm · center ${scientificLayer.center_mm.toFixed(1)} mm` : `${scaleLabel} · raw cell values`}</small>
-            {log && <small>Zero cells use below-range color</small>}
+            {log && <small>Positive range starts at {activeRecord.positive_minimum?.toExponential(2)}</small>}
           </div>
         )}
-      </div>
-
-      <div className="geometry-provenance">
-        <span>GEOMETRY<strong>Web CAD Geometry</strong></span>
-        <span>SOURCE<strong>GLB derived from STEP</strong></span>
-        <span>DISPLAYED CAD<strong>Fixed representative geometry</strong></span>
-        <span>3D SCIENTIFIC FIELD<strong className={scientificStatus === "ready" ? "" : "is-unavailable"}>{scientificStatus === "ready" ? "Loaded MCNP Simulation" : scientificStatus === "error" ? "Asset unavailable" : "Loading"}</strong></span>
-        <span>FIELD<strong>{scientificStatus === "ready" ? fieldDisplayName : "—"}</strong></span>
-        <span>SOURCE REPRESENTATION<strong>{scientificStatus === "ready" ? "Derived rectilinear cell grid · Float32" : "—"}</strong></span>
       </div>
 
       <div className="preview-status" data-testid="preview-status">

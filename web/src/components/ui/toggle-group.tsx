@@ -12,7 +12,7 @@ export function ToggleGroupItem({
   return (
     <ToggleGroupPrimitive.Item
       className={cn(
-        "h-7 flex-1 border-r border-[var(--line)] px-2 text-[10px] font-medium text-[var(--text-muted)] transition-colors last:border-r-0 hover:text-[var(--text-primary)] data-[state=on]:bg-cyan-400/10 data-[state=on]:text-[var(--accent-cyan)]",
+        "h-9 flex-1 border-r border-[var(--line)] px-2 text-[14px] font-medium text-[var(--text-muted)] transition-colors last:border-r-0 hover:bg-white/[0.03] hover:text-[var(--text-primary)] data-[state=on]:bg-cyan-400/12 data-[state=on]:text-[var(--accent-cyan)]",
         className,
       )}
       {...props}
