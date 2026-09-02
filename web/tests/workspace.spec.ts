@@ -31,6 +31,15 @@ test("every exposed interaction is functional, local-state, or explicitly unavai
   await expect(page.getByRole("heading", { name: "Blanket Unit Cell" })).toBeVisible();
   await expect(page.getByTestId("geometry-loading")).toBeVisible();
   await expect(page.getByTestId("geometry-ready")).toBeAttached({ timeout: 15_000 });
+  await expect(page.getByTestId("geometry-ready")).toHaveAttribute("data-geometry-source", "parametric-csg");
+  await expect(page.getByTestId("geometry-ready")).toHaveAttribute("data-primary-geometry-root-count", "1");
+  await expect(page.getByTestId("geometry-ready")).toHaveAttribute("data-component-count", "26");
+  await expect(page.getByTestId("geometry-ready")).not.toHaveAttribute("data-camera-position", "unknown");
+  const defaultCameraPosition = (await page.getByTestId("geometry-ready").getAttribute("data-camera-position"))!.split(",").map(Number);
+  const defaultCameraTarget = (await page.getByTestId("geometry-ready").getAttribute("data-camera-target"))!.split(",").map(Number);
+  expect(defaultCameraPosition[0] - defaultCameraTarget[0]).toBeLessThan(0);
+  expect(defaultCameraPosition[1] - defaultCameraTarget[1]).toBeGreaterThan(0);
+  expect(defaultCameraPosition[2] - defaultCameraTarget[2]).toBeLessThan(0);
   await expect(page.getByTestId("geometry-group-armor")).toHaveAttribute("data-mesh-count", "1");
   await expect(page.getByTestId("geometry-group-breeder")).toHaveAttribute("data-mesh-count", "1");
   await expect(page.getByTestId("geometry-group-multiplier")).toHaveAttribute("data-mesh-count", "1");
@@ -38,8 +47,11 @@ test("every exposed interaction is functional, local-state, or explicitly unavai
   await expect(page.getByTestId("geometry-group-coolant")).toHaveAttribute("data-mesh-count", "1");
   expect(glbResponseStatus).toBe(200);
   await expect(page.getByText("Web CAD Geometry", { exact: true }).first()).toBeVisible();
-  await expect(page.getByText("GLB derived from STEP", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText(/Parametric CSG|Fixed GLB derived from STEP/).first()).toBeVisible();
   await expect(page.locator(".geometry-provenance")).toHaveCount(0);
+  await expect(page.getByTestId("preview-status")).toHaveCount(0);
+  await expect(page.locator(".kpi-grid .kpi > span")).toHaveText(["Total TBR", "Multiplying", "Li-6 TBR", "Li-7 TBR"]);
+  await expect(page.getByTestId("kpi-multiplying").locator(".." )).toHaveClass(/kpi-amber/);
   await expect(page.getByTestId("api-status")).toContainText("Twin API · Connected");
   await expect(page.getByTestId("kpi-total-tbr")).not.toHaveText("--");
   await expect(page.getByTestId("scalar-source")).toHaveText("Simulation");
@@ -69,9 +81,11 @@ test("every exposed interaction is functional, local-state, or explicitly unavai
 
   // The real camera actions are enabled and each reports immediate feedback.
   await page.getByTestId("reset-camera").click();
-  await expect(page.getByTestId("preview-status")).toContainText("Camera reset to engineering view");
   await page.getByTestId("fit-assembly").click();
-  await expect(page.getByTestId("preview-status")).toContainText("Assembly fitted to viewport");
+  await page.getByTestId("roll-cw").click();
+  await page.getByTestId("roll-ccw").click();
+  await expect(page.getByTestId("rotate-x-cw")).toHaveCount(0);
+  await expect(page.getByTestId("rotate-x-ccw")).toHaveCount(0);
 
   // Overview -> Design; local slider motion marks the real scalar prediction pending.
   await page.getByTestId("nav-design").click();
@@ -94,7 +108,18 @@ test("every exposed interaction is functional, local-state, or explicitly unavai
   await expect(page.getByTestId("kpi-total-tbr")).toHaveText("1.12856");
   await expect(page.getByTestId("scalar-source")).toHaveText("Simulation");
   await expect(page.getByTestId("nearest-case")).toHaveText("104-A");
-  await expect(page.getByTestId("preview-status")).toContainText("CAD fixed");
+  await expect(page.getByText(/Parametric CSG/).first()).toBeVisible();
+  await expect(page.getByTestId("design-space-plot")).toBeVisible();
+  await expect(page.getByTestId("selected-design-marker")).toBeVisible();
+  await expect(page.getByTestId("applied-design-marker")).toBeVisible();
+  await expect(page.getByTestId("component-display-controls")).toBeVisible();
+  await expect(page.getByTestId("opacity-slider-armor")).toBeVisible();
+  await expect(page.getByTestId("opacity-slider-breeder")).toBeVisible();
+  await expect(page.getByTestId("opacity-slider-multiplier")).toBeVisible();
+  await expect(page.getByTestId("opacity-slider-structure")).toBeVisible();
+  await expect(page.getByTestId("opacity-slider-coolant")).toBeVisible();
+  await expect(page.getByTestId("opacity-armor")).toHaveText("100%");
+  await expect(page.getByTestId("opacity-structure")).toHaveText("100%");
 
   // An in-domain non-DOE coordinate is served by the real polynomial surrogate.
   for (let index = 0; index < 10; index += 1) await page.getByRole("slider", { name: "PZ 206" }).press("ArrowRight");
@@ -102,8 +127,15 @@ test("every exposed interaction is functional, local-state, or explicitly unavai
   await expect(page.getByTestId("pz-206-slider-value")).toContainText("3.10");
   await expect(page.getByTestId("cz-301-slider-value")).toContainText("3.80");
   const exactTotalTbr = await page.getByTestId("kpi-total-tbr").textContent();
+  await page.getByTestId("roll-cw").click();
+  const cameraPositionBeforeApply = await page.getByTestId("geometry-ready").getAttribute("data-camera-position");
+  const cameraTargetBeforeApply = await page.getByTestId("geometry-ready").getAttribute("data-camera-target");
+  const cameraUpBeforeApply = await page.getByTestId("geometry-ready").getAttribute("data-camera-up");
   await page.getByTestId("apply-design").click();
   await expect(page.getByTestId("scalar-source")).toHaveText("Surrogate Prediction");
+  await expect(page.getByTestId("geometry-ready")).toHaveAttribute("data-camera-position", cameraPositionBeforeApply!);
+  await expect(page.getByTestId("geometry-ready")).toHaveAttribute("data-camera-target", cameraTargetBeforeApply!);
+  await expect(page.getByTestId("geometry-ready")).toHaveAttribute("data-camera-up", cameraUpBeforeApply!);
   await expect(page.getByTestId("kpi-total-tbr")).not.toHaveText(exactTotalTbr ?? "1.12856");
 
   // Design -> Neutronics; all five fields and X/Y/Z raw-cell slices are real.
@@ -128,6 +160,8 @@ test("every exposed interaction is functional, local-state, or explicitly unavai
   await expect(page.getByTestId("scientific-field-ready")).toHaveAttribute("data-scale-mode", "log");
   await expect(page.getByTestId("scientific-scalar-bar")).toContainText("Log");
   await expect(page.getByTestId("scientific-scalar-bar")).toContainText("Zero / nonpositive");
+  await expect(page.getByTestId("scientific-display-controls")).toBeVisible();
+  await expect(page.getByTestId("scientific-slice-opacity-slider")).toBeVisible();
   const scalarDomain = await page.getByTestId("scientific-field-ready").getAttribute("data-scalar-domain");
   expect(scalarDomain).not.toContain("Infinity");
   expect(scalarDomain).not.toContain("NaN");
@@ -140,7 +174,6 @@ test("every exposed interaction is functional, local-state, or explicitly unavai
   await page.getByRole("slider", { name: "Z position" }).press("End");
   await expect(page.getByTestId("scientific-field-ready")).not.toHaveAttribute("data-z-layer", initialLayer ?? "");
   await expect(page.getByTestId("scientific-field-ready")).not.toHaveAttribute("data-z-layer-bounds", initialBounds ?? "");
-  await expect(page.getByTestId("preview-status")).toContainText("layer");
   await expect(page.getByTestId("scientific-scalar-bar")).toContainText("Z layer");
 
   await page.getByTestId("axis-x").click();
@@ -177,7 +210,6 @@ test("every exposed interaction is functional, local-state, or explicitly unavai
   await expect(page.getByRole("slider", { name: "Z position" })).toBeVisible();
 
   await page.getByTestId("mode-off").click();
-  await expect(page.getByTestId("preview-status")).toContainText("Total Nuclear Heating · display off");
   await expect(page.getByTestId("scientific-scalar-bar")).toBeHidden();
   await expect(page.getByTestId("probe-panel")).toContainText("Click the active slice");
   await expect(page.getByTestId("scientific-field-ready")).toHaveAttribute("data-visible", "false");
@@ -185,7 +217,7 @@ test("every exposed interaction is functional, local-state, or explicitly unavai
   await page.getByTestId("mode-slice").click();
   await expect(page.getByTestId("scientific-scalar-bar")).toBeVisible();
   await expect(page.getByTestId("scientific-field-ready")).toHaveAttribute("data-visible", "true");
-  await expect(page.getByTestId("preview-status")).toContainText("reference MCNP simulation");
+  await expect(page.getByText("Loaded MCNP Simulation", { exact: true }).first()).toBeVisible();
   await expect(page.getByTestId("scalar-source")).toHaveText("Surrogate Prediction");
 
   // Component selection and visibility update both the preview and selected-component panel.
@@ -202,11 +234,6 @@ test("every exposed interaction is functional, local-state, or explicitly unavai
   await expect(page.getByTestId("geometry-group-breeder")).toHaveAttribute("data-selected", "true");
   await page.getByTestId("component-opacity").press("Home");
   await expect(page.getByTestId("component-opacity-value")).toHaveText("15%");
-
-  // Scientific clipping is still unavailable and cannot masquerade as a working control.
-  await expect(page.getByRole("button", { name: "Section plane — unavailable" })).toBeDisabled();
-  await page.locator(".disabled-tool").hover();
-  await expect(page.getByRole("tooltip")).toContainText("Clipping is deferred for this milestone");
 
   // Thermal-hydraulics is a navigable unavailable state, not a fake loaded workspace.
   await page.getByTestId("nav-thermal-hydraulics").click();
@@ -226,6 +253,7 @@ test("every exposed interaction is functional, local-state, or explicitly unavai
 
 test("a missing geometry asset fails clearly without crashing the workspace", async ({ page }) => {
   await page.route("**/models/blanket_unit_cell.glb", (route) => route.abort("failed"));
+  await page.route("**/api/geometry/design", (route) => route.abort("failed"));
   await page.goto("/");
   await expect(page.getByTestId("geometry-error")).toContainText("Blanket geometry asset unavailable");
   await expect(page.getByTestId("reset-camera")).toBeDisabled();
@@ -368,6 +396,10 @@ test("the engineering workspace remains readable and unclipped at target desktop
     const viewportBox = await viewport.boundingBox();
     expect(viewportBox?.width).toBeGreaterThan(500);
     await expect(page.getByTestId("kpi-total-tbr")).toBeVisible();
+    await expect(page.getByTestId("component-display-controls")).toBeVisible();
+    for (const component of ["armor", "breeder", "multiplier", "structure", "coolant"]) {
+      await expect(page.getByTestId(`opacity-slider-${component}`)).toBeVisible();
+    }
 
     for (const section of ["overview", "design", "neutronics", "thermal-hydraulics", "performance"]) {
       await page.getByTestId(`nav-${section}`).click();
@@ -378,6 +410,8 @@ test("the engineering workspace remains readable and unclipped at target desktop
     await expect(page.getByTestId("scientific-scalar-bar")).toContainText("Total Nuclear Heating");
     await expect(page.getByTestId("scientific-scalar-bar")).toContainText("W/cm³");
     await expect(page.getByTestId("scientific-scalar-bar")).toContainText("Zero / nonpositive");
+    await expect(page.getByTestId("scientific-display-controls")).toBeVisible();
+    await expect(page.getByTestId("scientific-slice-opacity-slider")).toBeVisible();
 
     const readability = await page.evaluate(() => {
       const fontSize = (selector: string) => Number.parseFloat(getComputedStyle(document.querySelector(selector)!).fontSize);

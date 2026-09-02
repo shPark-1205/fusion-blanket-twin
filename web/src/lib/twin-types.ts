@@ -5,7 +5,7 @@ export type WorkspaceSection =
   | "thermal-hydraulics"
   | "performance";
 
-export type GeometrySource = "Parametric CSG" | "STEP";
+export type GeometrySource = "Parametric CSG" | "STEP" | "Fixed representative GLB";
 export type ScalarSource = "Simulation" | "Surrogate Prediction";
 export type FieldSource = "Not connected" | "Loaded MCNP Simulation";
 export type VisualizationMode = "Off" | "Slice" | "Iso-surface";
@@ -36,6 +36,7 @@ export interface DesignState {
 
 export type TwinApiStatus = "checking" | "connected" | "offline";
 export type PredictionStatus = "idle" | "pending" | "success" | "error";
+export type GeometryStatus = "idle" | "loading" | "success" | "error";
 
 export interface TwinApiHealth {
   status: "ok" | "degraded";
@@ -78,6 +79,7 @@ export interface ScalarPredictionResponse {
     domain_status: "exact" | "boundary" | "interpolation" | "extrapolation";
     warning: string | null;
     nearest_case: string;
+    nearest_design: ScalarPredictionRequest & { units: { pz_206: "cm"; cz_301_radius: "cm" } };
     nearest_distance: number;
     model_name: string;
     model_metadata: Record<string, unknown>;

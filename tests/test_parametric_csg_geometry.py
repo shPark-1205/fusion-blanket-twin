@@ -100,6 +100,18 @@ class ParametricCSGGeometryProviderTests(unittest.TestCase):
         self.assertNotEqual(baseline["Breeder"], changed_by_id["Breeder"])
         self.assertNotEqual(baseline["Pin_05"], changed_by_id["Pin_05"])
 
+    def test_generated_component_surfaces_are_closed_and_triangulated(self):
+        for component in self.assembly.components:
+            mesh = component.mesh.triangulate()
+            self.assertEqual(mesh.faces.size, mesh.n_cells * 4, component.component_id)
+            boundary_edges = mesh.extract_feature_edges(
+                boundary_edges=True,
+                feature_edges=False,
+                manifold_edges=False,
+                non_manifold_edges=False,
+            )
+            self.assertEqual(boundary_edges.n_cells, 0, component.component_id)
+
 
 if __name__ == "__main__":
     unittest.main()

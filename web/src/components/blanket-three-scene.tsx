@@ -15,6 +15,7 @@ import {
 import type { CameraCommand } from "@/lib/twin-store";
 import { useTwinStore } from "@/lib/twin-store";
 import type { ComponentId, ScientificFieldId, SliceAxis } from "@/lib/twin-types";
+import type { GeometryDesignResponse } from "@/lib/geometry-api";
 import {
   axisBoundaries,
   colorScalarValue,
@@ -36,10 +37,19 @@ interface SceneProps {
   cameraCommand: CameraCommand;
   onReady: (metrics: GeometryReadyMetrics) => void;
   onError: (message: string) => void;
+  onCameraState: (state: CameraState) => void;
 }
 
-const INITIAL_CAMERA = new THREE.Vector3(0.82, -1.28, 0.89);
 const INITIAL_TARGET = new THREE.Vector3(0, 0, 0.46);
+const INITIAL_CAMERA = INITIAL_TARGET.clone().add(
+  new THREE.Vector3(-1, 1, -1).normalize().multiplyScalar(1.58),
+);
+
+export interface CameraState {
+  position: [number, number, number];
+  target: [number, number, number];
+  up: [number, number, number];
+}
 
 function namesFromObject(object: THREE.Object3D) {
   const names: string[] = [];
@@ -68,6 +78,7 @@ function ScientificSlice() {
   const activeFieldId = useTwinStore((state) => state.activeFieldId) as ScientificFieldId;
   const scientificData = useTwinStore((state) => state.scientificField);
   const useLogScale = useTwinStore((state) => state.useLogScale);
+  const sliceOpacity = useTwinStore((state) => state.scientificSliceOpacity);
   const probe = useTwinStore((state) => state.scientificProbe);
   const probeVoxel = useTwinStore((state) => state.probeScientificVoxel);
   const reportRender = useTwinStore((state) => state.reportScientificRender);
@@ -119,9 +130,10 @@ function ScientificSlice() {
         <meshBasicMaterial
           vertexColors
           side={THREE.DoubleSide}
-          transparent
-          opacity={0.9}
-          depthWrite={false}
+          transparent={sliceOpacity < 0.999}
+          opacity={sliceOpacity}
+          depthWrite={sliceOpacity >= 0.999}
+          depthTest
           toneMapped={false}
         />
       </mesh>
@@ -225,6 +237,7 @@ function buildSliceGeometry(
 
   const addQuad = (corners: Array<[number, number, number]>, index: { i: number; j: number; k: number }) => {
     const value = values[linearCellIndex(manifest, index)];
+    if (!(value > 0)) return;
     const color = colorScalarValue(value, field, scaleMode);
     for (const cornerIndex of [0, 1, 2, 0, 2, 3]) {
       const [px, py, pz] = corners[cornerIndex];
@@ -274,8 +287,8 @@ function buildSliceGeometry(
   }
 
   return {
-    positions,
-    colors,
+    positions: positions.slice(0, offset),
+    colors: colors.slice(0, offset),
     layer,
     pickPositions: buildSlicePickPlane(axis, manifest, layer.center_mm),
     highlightPositions: probe && probe.indices[axis.toLowerCase() === "x" ? "i" : axis.toLowerCase() === "y" ? "j" : "k"] === layer.index
@@ -333,9 +346,28 @@ function buildProbeHighlight(axis: SliceAxis, probe: ScientificVoxelProbe) {
   return positions;
 }
 
-function CameraController({ model, command }: { model: THREE.Group | null; command: CameraCommand }) {
+function CameraController({
+  model,
+  command,
+  onCameraState,
+}: {
+  model: THREE.Group | null;
+  command: CameraCommand;
+  onCameraState: (state: CameraState) => void;
+}) {
   const controls = useRef<OrbitControlsImpl>(null);
+  const initialized = useRef(false);
+  const lastCommandSequence = useRef(0);
   const { camera, size, invalidate } = useThree();
+
+  const reportCameraState = useCallback(() => {
+    const target = controls.current?.target ?? INITIAL_TARGET;
+    onCameraState({
+      position: camera.position.toArray() as [number, number, number],
+      target: target.toArray() as [number, number, number],
+      up: camera.up.toArray() as [number, number, number],
+    });
+  }, [camera, onCameraState]);
 
   const reset = useCallback(() => {
     camera.position.copy(INITIAL_CAMERA);
@@ -343,8 +375,9 @@ function CameraController({ model, command }: { model: THREE.Group | null; comma
     camera.lookAt(INITIAL_TARGET);
     controls.current?.target.copy(INITIAL_TARGET);
     controls.current?.update();
+    reportCameraState();
     invalidate();
-  }, [camera, invalidate]);
+  }, [camera, invalidate, reportCameraState]);
 
   const fit = useCallback(() => {
     if (!model) return;
@@ -357,23 +390,39 @@ function CameraController({ model, command }: { model: THREE.Group | null; comma
     const horizontalFov = 2 * Math.atan(Math.tan(verticalFov / 2) * size.width / size.height);
     const limitingFov = Math.min(verticalFov, horizontalFov);
     const distance = sphere.radius / Math.sin(limitingFov / 2) * 1.12;
-    const direction = new THREE.Vector3(0.8, -1.25, 0.42).normalize();
+    const direction = new THREE.Vector3(-1, 1, -1).normalize();
     camera.position.copy(center).addScaledVector(direction, Math.max(distance, 0.62));
     controls.current?.target.copy(center);
     camera.lookAt(center);
     controls.current?.update();
+    reportCameraState();
     invalidate();
-  }, [camera, invalidate, model, size.height, size.width]);
+  }, [camera, invalidate, model, reportCameraState, size.height, size.width]);
+
+  const rotate = useCallback((action: CameraCommand["action"]) => {
+    const target = controls.current?.target ?? INITIAL_TARGET;
+    const direction = target.clone().sub(camera.position).normalize();
+    const angle = action === "roll-cw" ? -Math.PI / 2 : Math.PI / 2;
+    camera.up.applyAxisAngle(direction, angle);
+    camera.lookAt(target);
+    controls.current?.update();
+    reportCameraState();
+    invalidate();
+  }, [camera, invalidate, reportCameraState]);
 
   useEffect(() => {
-    if (command.sequence === 0) return;
+    if (command.sequence === 0 || command.sequence === lastCommandSequence.current) return;
+    lastCommandSequence.current = command.sequence;
     if (command.action === "reset") reset();
-    else fit();
-  }, [command, fit, reset]);
+    else if (command.action === "fit") fit();
+    else rotate(command.action);
+  }, [command, fit, reset, rotate]);
 
   useEffect(() => {
-    if (model) fit();
-  }, [fit, model]);
+    if (!model || initialized.current) return;
+    initialized.current = true;
+    reset();
+  }, [model, reset]);
 
   return (
     <OrbitControls
@@ -389,11 +438,12 @@ function CameraController({ model, command }: { model: THREE.Group | null; comma
       rotateSpeed={0.65}
       zoomSpeed={0.72}
       screenSpacePanning
+      onChange={reportCameraState}
     />
   );
 }
 
-function BlanketModel({ cameraCommand, onReady, onError }: SceneProps) {
+function BlanketModel({ cameraCommand, onReady, onError, onCameraState }: SceneProps) {
   const [model, setModel] = useState<THREE.Group | null>(null);
   const [hovered, setHovered] = useState<{ group: ComponentId; point: [number, number, number] } | null>(null);
   const selected = useTwinStore((state) => state.selectedComponentId);
@@ -401,8 +451,29 @@ function BlanketModel({ cameraCommand, onReady, onError }: SceneProps) {
   const opacity = useTwinStore((state) => state.componentOpacity);
   const section = useTwinStore((state) => state.section);
   const visualizationMode = useTwinStore((state) => state.visualizationMode);
+  const geometry = useTwinStore((state) => state.geometry);
   const selectComponent = useTwinStore((state) => state.selectComponent);
   const { invalidate } = useThree();
+
+  const parametricModel = useMemo(() => (
+    geometry ? buildParametricModel(geometry) : null
+  ), [geometry]);
+  const displayModel = parametricModel ?? model;
+
+  useEffect(() => {
+    if (!parametricModel) return;
+    const groups: Record<ComponentId, number> = { armor: 0, breeder: 0, multiplier: 0, structure: 0, coolant: 0 };
+    let meshes = 0;
+    let triangles = 0;
+    parametricModel.traverse((object) => {
+      if (!(object instanceof THREE.Mesh)) return;
+      const group = object.userData.semanticComponent as ComponentId;
+      groups[group] += 1;
+      meshes += 1;
+      triangles += countTriangles(object.geometry);
+    });
+    onReady({ totalMs: geometry?.generation_ms ?? 0, resourceMs: null, meshes, triangles, groups });
+  }, [geometry?.generation_ms, onReady, parametricModel]);
 
   useEffect(() => {
     let active = true;
@@ -424,7 +495,13 @@ function BlanketModel({ cameraCommand, onReady, onError }: SceneProps) {
             return;
           }
           object.userData.semanticComponent = group;
-          object.material = new THREE.MeshStandardMaterial({ side: THREE.DoubleSide });
+          object.material = new THREE.MeshStandardMaterial({
+            side: THREE.FrontSide,
+            transparent: false,
+            opacity: 1,
+            depthTest: true,
+            depthWrite: true,
+          });
           groups[group] += 1;
           meshes += 1;
           triangles += countTriangles(object.geometry);
@@ -453,8 +530,8 @@ function BlanketModel({ cameraCommand, onReady, onError }: SceneProps) {
   }, [onError, onReady]);
 
   useEffect(() => {
-    if (!model) return;
-    model.traverse((object) => {
+    if (!displayModel) return;
+    displayModel.traverse((object) => {
       if (!(object instanceof THREE.Mesh)) return;
       const group = semanticComponent(object);
       if (!group) return;
@@ -466,19 +543,27 @@ function BlanketModel({ cameraCommand, onReady, onError }: SceneProps) {
       material.roughness = appearance.roughness;
       material.opacity = opacity[group];
       material.transparent = opacity[group] < 0.999;
-      material.depthWrite = opacity[group] > 0.82;
+      material.depthTest = true;
+      material.depthWrite = opacity[group] >= 0.999 || opacity[group] > 0.82;
+      material.side = THREE.FrontSide;
       material.emissive.set(group === selected ? appearance.color : "#000000");
       material.emissiveIntensity = group === selected ? 0.2 : group === hovered?.group ? 0.07 : 0;
       material.needsUpdate = true;
     });
     invalidate();
-  }, [hovered, invalidate, model, opacity, selected, visibility]);
+  }, [displayModel, hovered, invalidate, opacity, selected, visibility]);
 
   useEffect(() => () => {
     model?.traverse((object) => {
       if (object instanceof THREE.Mesh) (object.material as THREE.Material).dispose();
     });
-  }, [model]);
+    parametricModel?.traverse((object) => {
+      if (object instanceof THREE.Mesh) {
+        object.geometry.dispose();
+        (object.material as THREE.Material).dispose();
+      }
+    });
+  }, [model, parametricModel]);
 
   const handlePointer = (event: ThreeEvent<PointerEvent>) => {
     event.stopPropagation();
@@ -500,9 +585,9 @@ function BlanketModel({ cameraCommand, onReady, onError }: SceneProps) {
       <directionalLight position={[1.5, -1.8, 2.2]} intensity={2.6} />
       <directionalLight position={[-1.4, 0.8, 0.5]} intensity={0.9} color="#8fb5cf" />
       <gridHelper args={[1.3, 26, "#263a43", "#14262e"]} position={[0, -0.082, 0.46]} />
-      {model && (
+      {displayModel && (
         <primitive
-          object={model}
+          object={displayModel}
           scale={BLANKET_GEOMETRY_ADAPTER.sourceToSceneScale}
           onClick={handleClick}
           onPointerMove={handlePointer}
@@ -514,7 +599,7 @@ function BlanketModel({ cameraCommand, onReady, onError }: SceneProps) {
       )}
       <ScientificSlice />
       <ScientificProbeController />
-      <CameraController model={model} command={cameraCommand} />
+      <CameraController model={displayModel} command={cameraCommand} onCameraState={onCameraState} />
       <GizmoHelper alignment="bottom-left" margin={[72, 58]}>
         <GizmoViewport axisColors={["#b95c5c", "#55a16e", "#528ec8"]} labelColor="#dce6ea" />
       </GizmoHelper>
@@ -527,6 +612,29 @@ function BlanketModel({ cameraCommand, onReady, onError }: SceneProps) {
   );
 }
 
+function buildParametricModel(response: GeometryDesignResponse): THREE.Group {
+  const group = new THREE.Group();
+  group.name = "ParametricCSGGeometry";
+  for (const component of response.components) {
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.Float32BufferAttribute(component.positions, 3));
+    geometry.setIndex(component.indices);
+    geometry.computeVertexNormals();
+    const mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({
+      side: THREE.FrontSide,
+      transparent: false,
+      opacity: 1,
+      depthTest: true,
+      depthWrite: true,
+    }));
+    mesh.name = component.display_name;
+    mesh.userData.semanticComponent = component.group.toLowerCase() as ComponentId;
+    mesh.userData.parametricComponent = component.id;
+    group.add(mesh);
+  }
+  return group;
+}
+
 export function BlanketThreeScene(props: SceneProps) {
   return (
     <Canvas
@@ -534,6 +642,10 @@ export function BlanketThreeScene(props: SceneProps) {
       camera={{ fov: 38, near: 0.01, far: 20, position: INITIAL_CAMERA.toArray() }}
       dpr={[1, 1.35]}
       gl={{ antialias: true, alpha: true, powerPreference: "high-performance" }}
+      onCreated={({ gl }) => {
+        gl.toneMapping = THREE.NoToneMapping;
+        gl.outputColorSpace = THREE.SRGBColorSpace;
+      }}
       onPointerMissed={() => { document.body.style.cursor = ""; }}
     >
       <BlanketModel {...props} />

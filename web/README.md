@@ -43,6 +43,7 @@ Open:
 - `GET /api/health` reports API/model readiness, API version, service startup time, and case count without exposing local paths.
 - `GET /api/design-domain` reports backend-derived PZ 206 and CZ 301 radius ranges, known DOE levels, and centimetre units.
 - `POST /api/predict/scalars` accepts `{"pz_206": number, "cz_301_radius": number}` in MCNP centimetres and returns Total TBR, Li-6 TBR, Li-7 TBR, Multiplying, exact/surrogate provenance, domain/extrapolation status, warning, nearest case, normalized nearest distance, and model metadata.
+- `POST /api/geometry/design` accepts the same centimetre design coordinates and returns Python `ParametricCSGGeometryProvider` component surface meshes in project millimetres, with semantic groups, bounds, counts, provenance, generation timing, and cache status.
 
 The FastAPI lifespan constructs the `ScalarPredictionService` once. Requests reuse that service and its fitted degree-3 scalar models. Exact DOE coordinates resolve to simulation values; other accepted coordinates use the existing surrogate, and extrapolation is returned explicitly rather than silently clamped.
 
@@ -66,12 +67,13 @@ Playwright starts both the real Python API and the Next.js development server. I
 - `src/lib/scientific-field.ts` validates and loads the derived rectilinear cell-grid manifest, lazily loads Float32 field arrays, caches loaded arrays, maps X/Y/Z slice positions to raw cells, and computes click-based raw voxel probes.
 - `src/lib/mock-twin-state.ts` supplies presentation-only geometry, field-control, and operating-basis state; it does not supply scalar KPIs.
 - `src/lib/twin-store.ts` owns local interaction state and the health → domain → initial-prediction lifecycle.
+- `src/lib/geometry-api.ts` is the typed client for Python parametric component-mesh responses; geometry is requested on startup and Apply Design, while the store retains the last good assembly during pending/error states.
 - `src/lib/blanket-geometry.ts` owns the GLB path, unit adapter, engineering appearances, and source-name-to-semantic-component mapping.
 - `src/components/blanket-three-scene.tsx` owns the React Three Fiber scene, GLB lifecycle, camera, picking, and the same-camera scientific slice layer.
 - `src/components/` contains the workstation shell, contextual controls, Web CAD viewport, KPI/provenance rail, and plot area.
 - `src/components/ui/` contains restrained shadcn-style Radix primitives.
 
-The blanket geometry at `public/models/blanket_unit_cell.glb` is a web presentation derivative of STEP geometry. Its numeric coordinates are millimetres and are normalized once to metre-sized Three.js scene units in `blanket-geometry.ts`; the GLB node transforms remain intact. MCNP coordinates are transformed from centimetres to millimetres by the documented ×10 scale with no offset or rotation, then share the same scene scaling and camera as the CAD. The auxiliary chart remains explicitly labeled as a presentation placeholder.
+The startup GLB at `public/models/blanket_unit_cell.glb` is a fixed presentation fallback derived from STEP geometry. When the geometry API responds, the viewport replaces it with Python `ParametricCSGGeometryProvider` component meshes in millimetres. Both paths use the same metre-sized Three.js scene scale and camera; the GLB node transforms remain intact. MCNP coordinates are transformed from centimetres to millimetres by the documented ×10 scale with no offset or rotation, then share the same scene scaling and camera as the CAD. The auxiliary chart remains explicitly labeled as a presentation placeholder.
 
 ## Interaction scope
 

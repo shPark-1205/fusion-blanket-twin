@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertTriangle, Check, CircleOff, Database, FlaskConical, RotateCcw, ScanLine } from "lucide-react";
+import { AlertTriangle, Check, CircleOff, Database, Eye, EyeOff, FlaskConical, RotateCcw, ScanLine } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
@@ -75,6 +75,72 @@ function ParameterControl({
   );
 }
 
+function ComponentDisplayControls() {
+  const selectedId = useTwinStore((state) => state.selectedComponentId);
+  const visibility = useTwinStore((state) => state.componentVisibility);
+  const opacity = useTwinStore((state) => state.componentOpacity);
+  const selectComponent = useTwinStore((state) => state.selectComponent);
+  const toggleComponent = useTwinStore((state) => state.toggleComponent);
+  const setOpacity = useTwinStore((state) => state.setComponentOpacity);
+
+  return (
+    <div className="panel-section display-controls" data-testid="component-display-controls">
+      <div className="section-label">COMPONENT DISPLAY</div>
+      <p className="control-help">Select, hide, or adjust group opacity without changing the generated geometry.</p>
+      {mockTwinState.components.map((component) => (
+        <div className={`component-display-row ${selectedId === component.id ? "is-selected" : ""}`} key={component.id}>
+          <div className="component-display-heading">
+            <button type="button" onClick={() => selectComponent(component.id)} aria-pressed={selectedId === component.id} data-testid={`component-${component.id}`}>
+              <i style={{ backgroundColor: component.color }} />{component.label}
+            </button>
+            <button type="button" className="component-display-visibility" onClick={() => toggleComponent(component.id)} aria-label={`${visibility[component.id] ? "Hide" : "Show"} ${component.label}`} aria-pressed={visibility[component.id]} data-testid={`visibility-${component.id}`}>
+              {visibility[component.id] ? <Eye size={13} /> : <EyeOff size={13} />}
+            </button>
+          </div>
+          <label className="opacity-control">
+            <span><strong>Opacity</strong><output data-testid={`opacity-${component.id}`}>{Math.round(opacity[component.id] * 100)}%</output></span>
+            <input
+              type="range"
+              min="15"
+              max="100"
+              step="5"
+              value={Math.round(opacity[component.id] * 100)}
+              aria-label={`${component.label} opacity`}
+              data-testid={`opacity-slider-${component.id}`}
+              onChange={(event) => setOpacity(component.id, Number(event.target.value) / 100)}
+            />
+          </label>
+          <small>{visibility[component.id] ? "Visible" : "Hidden"}</small>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ScientificDisplayControls() {
+  const opacity = useTwinStore((state) => state.scientificSliceOpacity);
+  const setOpacity = useTwinStore((state) => state.setScientificSliceOpacity);
+  return (
+    <div className="panel-section display-controls" data-testid="scientific-display-controls">
+      <div className="section-label">SCIENTIFIC DISPLAY</div>
+      <label className="opacity-control">
+        <span><strong>Slice opacity</strong><output data-testid="scientific-slice-opacity">{Math.round(opacity * 100)}%</output></span>
+        <input
+          type="range"
+          min="25"
+          max="100"
+          step="5"
+          value={Math.round(opacity * 100)}
+          aria-label="Scientific slice opacity"
+          data-testid="scientific-slice-opacity-slider"
+          onChange={(event) => setOpacity(Number(event.target.value) / 100)}
+        />
+      </label>
+      <p className="control-help">Visualization only; raw MCNP values and probe data are unchanged.</p>
+    </div>
+  );
+}
+
 function OverviewControls() {
   const appliedPz206 = useTwinStore((state) => state.appliedPz206);
   const appliedCz301 = useTwinStore((state) => state.appliedCz301);
@@ -100,7 +166,7 @@ function OverviewControls() {
       </div>
       <div className="info-note">
         <Database size={13} />
-        <p>Scalar KPIs come from the Python twin API. The GLB remains fixed; the reference MCNP field is loaded independently and never follows arbitrary PZ/CZ selections.</p>
+        <p>Scalar KPIs come from the Python twin API. Parametric CSG geometry updates only after Apply Design; the reference MCNP field is loaded independently and never follows arbitrary PZ/CZ selections.</p>
       </div>
     </>
   );
@@ -114,6 +180,7 @@ function DesignControls() {
   const designDomain = useTwinStore((state) => state.designDomain);
   const predictionStatus = useTwinStore((state) => state.predictionStatus);
   const predictionError = useTwinStore((state) => state.predictionError);
+  const prediction = useTwinStore((state) => state.prediction);
   const setPz206 = useTwinStore((state) => state.setPz206);
   const setCz301 = useTwinStore((state) => state.setCz301);
   const applyDesign = useTwinStore((state) => state.applyDesign);
@@ -125,6 +192,19 @@ function DesignControls() {
   const pzDomain = designDomain?.pz_206;
   const czDomain = designDomain?.cz_301_radius;
   const applying = predictionStatus === "pending";
+  const pzLevels = pzDomain?.levels ?? [];
+  const czLevels = czDomain?.levels ?? [];
+  const markerPosition = (pzValue: number, czValue: number) => {
+    const pzMin = pzDomain?.minimum ?? pz.min;
+    const pzMax = pzDomain?.maximum ?? pz.max;
+    const czMin = czDomain?.minimum ?? cz.min;
+    const czMax = czDomain?.maximum ?? cz.max;
+    return {
+      left: `${((pzValue - pzMin) / Math.max(pzMax - pzMin, 1e-9)) * 100}%`,
+      bottom: `${((czValue - czMin) / Math.max(czMax - czMin, 1e-9)) * 100}%`,
+    };
+  };
+  const nearest = prediction?.metadata.nearest_design;
   const stateText = applying
     ? "Updating prediction…"
     : predictionStatus === "error"
@@ -153,14 +233,21 @@ function DesignControls() {
       </div>
       <div className="design-space">
         <div className="section-label">DESIGN SPACE / 10 × 10 DOE</div>
-        <div className="doe-grid" aria-label="Design-space position">
-          {Array.from({ length: 100 }, (_, i) => <i key={i} className={i === 99 ? "active" : ""} />)}
+        <div className="doe-plot" aria-label="Fixed DOE simulations with selected design marker" data-testid="design-space-plot">
+          {pzLevels.flatMap((pzLevel) => czLevels.map((czLevel) => (
+            <i key={`${pzLevel}-${czLevel}`} className="doe-point" style={markerPosition(pzLevel, czLevel)} title={`DOE simulation · PZ ${pzLevel.toFixed(2)} · CZ ${czLevel.toFixed(2)} cm`} />
+          )))}
+          <i className="design-marker selected" style={markerPosition(pz206, cz301)} data-testid="selected-design-marker" title="Selected design" />
+          {appliedPz206 !== null && appliedCz301 !== null && <i className="design-marker applied" style={markerPosition(appliedPz206, appliedCz301)} data-testid="applied-design-marker" title="Applied geometry design" />}
+          {prediction?.metadata.status === "exact" && <i className="design-marker exact" style={markerPosition(prediction.design.pz_206, prediction.design.cz_301_radius)} data-testid="exact-design-marker" title="Exact simulation case" />}
+          {nearest && <i className="design-marker nearest" style={markerPosition(nearest.pz_206, nearest.cz_301_radius)} data-testid="nearest-design-marker" title={`Nearest simulation ${prediction?.metadata.nearest_case ?? ""}`} />}
         </div>
-        <div className="range-labels"><span>PZ GROUP</span><span>CZ GROUP</span></div>
+        <div className="range-labels"><span>PZ GROUP →</span><span>↑ CZ GROUP</span></div>
+        <div className="design-space-legend"><span><i className="legend-dot selected" /> Selected</span><span><i className="legend-dot applied" /> Applied geometry</span><span><i className="legend-dot nearest" /> Nearest simulation</span></div>
       </div>
       <div className="info-note">
         <FlaskConical size={13} />
-        <p>Apply Design requests real scalar KPIs. The Web CAD asset is fixed and does not deform to these PZ/CZ values; parametric web geometry is not connected.</p>
+        <p>DOE simulations remain fixed. Apply Design requests scalar KPIs and Python parametric CSG geometry; the loaded reference MCNP field remains independent.</p>
       </div>
     </>
   );
@@ -367,6 +454,8 @@ export function ControlPanel() {
         {section === "neutronics" && <NeutronicsControls />}
         {section === "thermal-hydraulics" && <ThermalControls />}
         {section === "performance" && <PerformanceControls />}
+        {section !== "thermal-hydraulics" && <ComponentDisplayControls />}
+        {section === "neutronics" && <ScientificDisplayControls />}
       </div>
     </aside>
   );

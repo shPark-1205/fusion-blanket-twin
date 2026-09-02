@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { mockTwinState } from "./mock-twin-state";
 import { twinApi, TwinApiError } from "./twin-api";
+import { geometryApi, type GeometryDesignResponse } from "./geometry-api";
 import {
   buildVoxelProbe,
   loadAllScientificFieldValues,
@@ -20,6 +21,7 @@ import type {
   ComponentState,
   DesignDomain,
   PredictionStatus,
+  GeometryStatus,
   ScalarPredictionResponse,
   SliceAxis,
   TwinApiHealth,
@@ -28,7 +30,10 @@ import type {
   WorkspaceSection,
 } from "./twin-types";
 
-export type CameraCommand = { action: "reset" | "fit"; sequence: number };
+export type CameraCommand = {
+  action: "reset" | "fit" | "roll-cw" | "roll-ccw";
+  sequence: number;
+};
 
 interface TwinUiState {
   section: WorkspaceSection;
@@ -42,6 +47,11 @@ interface TwinUiState {
   predictionStatus: PredictionStatus;
   prediction: ScalarPredictionResponse | null;
   predictionError: string | null;
+  geometryStatus: GeometryStatus;
+  geometry: GeometryDesignResponse | null;
+  geometryError: string | null;
+  appliedGeometryPz206: number | null;
+  appliedGeometryCz301: number | null;
   scientificFieldStatus: ScientificFieldStatus;
   scientificField: ScientificFieldData | null;
   scientificFieldError: string | null;
@@ -57,6 +67,7 @@ interface TwinUiState {
   selectedComponentId: ComponentId;
   componentVisibility: Record<ComponentId, boolean>;
   componentOpacity: Record<ComponentId, number>;
+  scientificSliceOpacity: number;
   cameraCommand: CameraCommand;
   initializeTwinApi: () => Promise<void>;
   initializeScientificField: () => Promise<void>;
@@ -76,6 +87,7 @@ interface TwinUiState {
   selectComponent: (id: ComponentId) => void;
   toggleComponent: (id: ComponentId) => void;
   setComponentOpacity: (id: ComponentId, opacity: number) => void;
+  setScientificSliceOpacity: (opacity: number) => void;
   requestCamera: (action: CameraCommand["action"]) => void;
 }
 
@@ -94,6 +106,11 @@ export const useTwinStore = create<TwinUiState>((set, get) => ({
   predictionStatus: "idle",
   prediction: null,
   predictionError: null,
+  geometryStatus: "idle",
+  geometry: null,
+  geometryError: null,
+  appliedGeometryPz206: null,
+  appliedGeometryCz301: null,
   scientificFieldStatus: "idle",
   scientificField: null,
   scientificFieldError: null,
@@ -110,7 +127,8 @@ export const useTwinStore = create<TwinUiState>((set, get) => ({
   componentVisibility: Object.fromEntries(
     mockTwinState.components.map((component: ComponentState) => [component.id, component.visible]),
   ) as Record<ComponentId, boolean>,
-  componentOpacity: { armor: 0.62, breeder: 1, multiplier: 0.82, structure: 0.38, coolant: 0.28 },
+  componentOpacity: { armor: 1, breeder: 1, multiplier: 1, structure: 1, coolant: 1 },
+  scientificSliceOpacity: 1,
   cameraCommand: { action: "reset", sequence: 0 },
   initializeTwinApi: () => {
     initializationPromise ??= initializeTwinState();
@@ -134,23 +152,39 @@ export const useTwinStore = create<TwinUiState>((set, get) => ({
   setCz301: (cz301) => set({ cz301 }),
   applyDesign: async () => {
     const { pz206, cz301 } = get();
-    set({ predictionStatus: "pending", predictionError: null });
-    try {
-      const prediction = await twinApi.predictScalars({ pz_206: pz206, cz_301_radius: cz301 });
+    set({ predictionStatus: "pending", predictionError: null, geometryStatus: "loading", geometryError: null });
+    const [predictionResult, geometryResult] = await Promise.allSettled([
+      twinApi.predictScalars({ pz_206: pz206, cz_301_radius: cz301 }),
+      geometryApi.design({ pz_206: pz206, cz_301_radius: cz301 }),
+    ]);
+    if (predictionResult.status === "fulfilled") {
       set({
-        appliedPz206: prediction.design.pz_206,
-        appliedCz301: prediction.design.cz_301_radius,
+        appliedPz206: predictionResult.value.design.pz_206,
+        appliedCz301: predictionResult.value.design.cz_301_radius,
         apiStatus: "connected",
-        prediction,
+        prediction: predictionResult.value,
         predictionStatus: "success",
         predictionError: null,
       });
-    } catch (error) {
+    } else {
+      const error = predictionResult.reason;
       set({
         apiStatus: isBackendUnavailable(error) ? "offline" : "connected",
         predictionStatus: "error",
         predictionError: errorMessage(error),
       });
+    }
+    if (geometryResult.status === "fulfilled") {
+      const result = geometryResult.value;
+      set({
+        geometryStatus: "success",
+        geometry: result,
+        geometryError: null,
+        appliedGeometryPz206: result.design.pz_206,
+        appliedGeometryCz301: result.design.cz_301_radius,
+      });
+    } else {
+      set({ geometryStatus: "error", geometryError: errorMessage(geometryResult.reason) });
     }
   },
   resetDesign: () => set({
@@ -234,6 +268,7 @@ export const useTwinStore = create<TwinUiState>((set, get) => ({
   setComponentOpacity: (id, opacity) => set((state) => ({
     componentOpacity: { ...state.componentOpacity, [id]: Math.max(0.15, Math.min(1, opacity)) },
   })),
+  setScientificSliceOpacity: (opacity) => set({ scientificSliceOpacity: Math.max(0.25, Math.min(1, opacity)) }),
   requestCamera: (action) => set((state) => ({ cameraCommand: { action, sequence: state.cameraCommand.sequence + 1 } })),
 }));
 
@@ -307,6 +342,8 @@ async function loadActiveScientificField(activeFieldId: ScientificFieldId, initi
 
 async function initializeTwinState(): Promise<void> {
   useTwinStore.setState({ apiStatus: "checking", predictionStatus: "idle", predictionError: null });
+  const initial = useTwinStore.getState();
+  void loadInitialGeometry(initial.pz206, initial.cz301);
   try {
     const health = await twinApi.health();
     if (health.status !== "ok" || health.scalar_prediction !== "ready") {
@@ -330,6 +367,22 @@ async function initializeTwinState(): Promise<void> {
       predictionStatus: "error",
       predictionError: errorMessage(error),
     });
+  }
+}
+
+async function loadInitialGeometry(pz206: number, cz301: number): Promise<void> {
+  useTwinStore.setState({ geometryStatus: "loading", geometryError: null });
+  try {
+    const geometry = await geometryApi.design({ pz_206: pz206, cz_301_radius: cz301 });
+    useTwinStore.setState({
+      geometryStatus: "success",
+      geometry,
+      geometryError: null,
+      appliedGeometryPz206: geometry.design.pz_206,
+      appliedGeometryCz301: geometry.design.cz_301_radius,
+    });
+  } catch (error) {
+    useTwinStore.setState({ geometryStatus: "error", geometryError: errorMessage(error) });
   }
 }
 

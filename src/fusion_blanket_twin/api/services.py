@@ -9,6 +9,7 @@ from time import perf_counter
 
 from fusion_blanket_twin.config.settings import PROJECT_ROOT
 from fusion_blanket_twin.surrogate.service import ScalarPredictionService
+from fusion_blanket_twin.api.geometry_service import ParametricGeometryService
 
 
 DEFAULT_INPUT_DIR = PROJECT_ROOT / "data" / "local" / "mcnp_inputs"
@@ -35,6 +36,7 @@ class TwinServices:
     scalar_prediction: ScalarPredictionService | None
     startup_seconds: float
     error: str | None = None
+    geometry: ParametricGeometryService | None = None
 
     @property
     def case_count(self) -> int:
@@ -46,6 +48,7 @@ def load_twin_services(settings: ApiSettings | None = None) -> TwinServices:
 
     started = perf_counter()
     selected = settings or ApiSettings.from_environment()
+    geometry = ParametricGeometryService()
     try:
         predictor = ScalarPredictionService.from_paths(
             selected.input_dir,
@@ -56,8 +59,10 @@ def load_twin_services(settings: ApiSettings | None = None) -> TwinServices:
             scalar_prediction=None,
             startup_seconds=perf_counter() - started,
             error=str(exc),
+            geometry=geometry,
         )
     return TwinServices(
         scalar_prediction=predictor,
         startup_seconds=perf_counter() - started,
+        geometry=geometry,
     )

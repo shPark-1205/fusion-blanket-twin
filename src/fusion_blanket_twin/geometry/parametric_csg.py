@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from math import cos, pi
+from math import cos, pi, sin
 
 import numpy as np
 import pyvista as pv
@@ -479,14 +479,24 @@ def _cylinder(
     radius = _cm_to_mm(radius_cm)
     z_min = _cm_to_mm(z_min_cm)
     z_max = _cm_to_mm(z_max_cm)
-    return pv.Cylinder(
-        center=(0.0, 0.0, (z_min + z_max) * 0.5),
-        direction=(0.0, 0.0, 1.0),
-        radius=radius,
-        height=z_max - z_min,
-        resolution=resolution,
-        capping=True,
-    ).triangulate()
+    count = max(12, resolution)
+    angles = np.linspace(0.0, 2.0 * pi, count, endpoint=False)
+    points = [(0.0, 0.0, z_min)]
+    points.extend((radius * np.cos(angle), radius * np.sin(angle), z_min) for angle in angles)
+    points.append((0.0, 0.0, z_max))
+    points.extend((radius * np.cos(angle), radius * np.sin(angle), z_max) for angle in angles)
+    bottom_center = 0
+    bottom_ring = 1
+    top_center = count + 1
+    top_ring = count + 2
+    faces: list[int] = []
+    for index in range(count):
+        next_index = (index + 1) % count
+        faces.extend([3, bottom_center, bottom_ring + next_index, bottom_ring + index])
+        faces.extend([3, top_center, top_ring + index, top_ring + next_index])
+        faces.extend([3, bottom_ring + index, bottom_ring + next_index, top_ring + next_index])
+        faces.extend([3, bottom_ring + index, top_ring + next_index, top_ring + index])
+    return _clean_polydata(np.asarray(points, dtype=float), faces)
 
 
 def _annular_cylinder(
@@ -528,13 +538,43 @@ def _hex_with_cylinder_hole(
     inner_radius_cm: float,
     resolution: int,
 ) -> pv.PolyData:
-    return _append_polydata(
-        (
-            _hex_prism(z_min_cm, z_max_cm, outer_apothem_cm),
-            _cylinder(inner_radius_cm, z_min_cm, z_max_cm, resolution),
-        )
-    )
+    # A hole is represented by one annular boundary mesh.  The previous
+    # full-hex-cap plus capped-cylinder composition left coplanar faces and
+    # made the front of the generated assembly look like overlapping STL
+    # shells.  Sampling the regular-hex perimeter at the same angles as the
+    # circular opening lets each cap be triangulated without a false centre.
+    outer_apothem = _cm_to_mm(outer_apothem_cm)
+    inner_radius = _cm_to_mm(inner_radius_cm)
+    if inner_radius <= 0.0 or outer_apothem <= 0.0:
+        return _hex_prism(z_min_cm, z_max_cm, outer_apothem_cm)
+    count = max(12, min(resolution, 24))
+    angles = np.linspace(0.0, 2.0 * pi, count, endpoint=False)
+    outer_radii = [
+        outer_apothem / cos(angle - (pi / 6.0 + round((angle - pi / 6.0) / (pi / 3.0)) * (pi / 3.0)))
+        for angle in angles
+    ]
+    if inner_radius >= min(outer_radii):
+        raise ValueError("cylindrical hole must fit inside the hexagonal prism")
+    z_min = _cm_to_mm(z_min_cm)
+    z_max = _cm_to_mm(z_max_cm)
+    outer_bottom = [(radius * cos(angle), radius * sin(angle), z_min) for angle, radius in zip(angles, outer_radii)]
+    inner_bottom = [(inner_radius * cos(angle), inner_radius * sin(angle), z_min) for angle in angles]
+    outer_top = [(x, y, z_max) for x, y, _ in outer_bottom]
+    inner_top = [(x, y, z_max) for x, y, _ in inner_bottom]
+    points = np.asarray(outer_bottom + inner_bottom + outer_top + inner_top, dtype=float)
+    bottom_outer, bottom_inner, top_outer, top_inner = 0, count, count * 2, count * 3
+    faces: list[int] = []
 
+    def add_quad(a: int, b: int, c: int, d: int) -> None:
+        faces.extend([3, a, b, c, 3, a, c, d])
+
+    for index in range(count):
+        next_index = (index + 1) % count
+        add_quad(bottom_outer + next_index, bottom_outer + index, bottom_inner + index, bottom_inner + next_index)
+        add_quad(top_outer + index, top_outer + next_index, top_inner + next_index, top_inner + index)
+        add_quad(bottom_outer + index, bottom_outer + next_index, top_outer + next_index, top_outer + index)
+        add_quad(bottom_inner + next_index, bottom_inner + index, top_inner + index, top_inner + next_index)
+    return pv.PolyData(points, np.asarray(faces, dtype=np.int64))
 
 def _append_polydata(meshes: tuple[pv.PolyData, ...]) -> pv.PolyData:
     merged = (

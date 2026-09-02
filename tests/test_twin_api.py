@@ -1,10 +1,12 @@
 from pathlib import Path
+import math
 import unittest
 
 from fastapi.testclient import TestClient
 
 from fusion_blanket_twin.api.app import create_app
 from fusion_blanket_twin.api.services import TwinServices
+from fusion_blanket_twin.api.geometry_service import ParametricGeometryService
 from fusion_blanket_twin.data.case_registry import CaseRegistry
 from fusion_blanket_twin.surrogate.service import ScalarPredictionService
 
@@ -66,6 +68,8 @@ class TwinApiTests(unittest.TestCase):
         self.assertEqual(body["metadata"]["source"], "simulation")
         self.assertEqual(body["metadata"]["status"], "exact")
         self.assertEqual(body["metadata"]["nearest_case"], "104-A")
+        self.assertEqual(body["metadata"]["nearest_design"]["units"]["pz_206"], "cm")
+        self.assertAlmostEqual(body["metadata"]["nearest_design"]["pz_206"], 2.6)
         self.assertAlmostEqual(body["kpis"]["total_tbr"], 1.12856)
 
     def test_intermediate_case_returns_surrogate_provenance(self):
@@ -133,6 +137,44 @@ class UnavailableTwinApiTests(unittest.TestCase):
         self.assertEqual(health.json()["status"], "degraded")
         self.assertEqual(health.json()["scalar_prediction"], "unavailable")
         self.assertEqual(prediction.status_code, 503)
+
+
+class GeometryApiTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.geometry = ParametricGeometryService()
+        cls.client_context = TestClient(
+            create_app(lambda: TwinServices(None, startup_seconds=0.01, geometry=cls.geometry))
+        )
+        cls.client = cls.client_context.__enter__()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.client_context.__exit__(None, None, None)
+
+    def test_geometry_endpoint_returns_component_meshes_and_provenance(self):
+        response = self.client.post(
+            "/api/geometry/design", json={"pz_206": 2.6, "cz_301_radius": 3.6}
+        )
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["units"], "mm")
+        self.assertEqual(body["provenance"]["source"], "ParametricCSGGeometryProvider")
+        self.assertEqual(body["component_count"], 26)
+        self.assertGreater(body["triangle_count"], 0)
+        self.assertEqual({item["group"] for item in body["components"]}, {"Armor", "Breeder", "Multiplier", "Structure", "Coolant"})
+        self.assertTrue(all(math.isfinite(value) for item in body["components"] for value in item["positions"]))
+
+    def test_geometry_endpoint_reuses_same_design_cache(self):
+        first = self.client.post("/api/geometry/design", json={"pz_206": 2.7, "cz_301_radius": 3.7}).json()
+        second = self.client.post("/api/geometry/design", json={"pz_206": 2.7, "cz_301_radius": 3.7}).json()
+        self.assertFalse(first["cache_hit"])
+        self.assertTrue(second["cache_hit"])
+        self.assertEqual(first["components"][0]["bounds_mm"], second["components"][0]["bounds_mm"])
+
+    def test_geometry_endpoint_rejects_invalid_radius(self):
+        response = self.client.post("/api/geometry/design", json={"pz_206": 2.6, "cz_301_radius": -1})
+        self.assertEqual(response.status_code, 422)
 
 
 if __name__ == "__main__":

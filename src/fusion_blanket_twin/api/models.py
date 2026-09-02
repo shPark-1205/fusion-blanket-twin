@@ -62,6 +62,7 @@ class ScalarPredictionMetadataResponse(StrictApiModel):
     domain_status: Literal["exact", "boundary", "interpolation", "extrapolation"]
     warning: str | None
     nearest_case: str
+    nearest_design: PredictionDesign
     nearest_distance: float
     model_name: str
     model_metadata: dict[str, object]
@@ -71,3 +72,49 @@ class ScalarPredictionResponse(StrictApiModel):
     design: PredictionDesign
     kpis: ScalarKpisResponse
     metadata: ScalarPredictionMetadataResponse
+
+
+class GeometryDesignRequest(StrictApiModel):
+    pz_206: float = Field(allow_inf_nan=False, description="PZ 206 plane coordinate in cm.")
+    cz_301_radius: float = Field(
+        allow_inf_nan=False,
+        gt=0.0,
+        description="CZ 301 radius in cm.",
+    )
+
+
+class GeometryDesign(StrictApiModel):
+    pz_206: float
+    cz_301_radius: float
+    units: dict[str, Literal["cm"]]
+
+
+class GeometryComponentMesh(StrictApiModel):
+    id: str
+    group: Literal["Armor", "Breeder", "Multiplier", "Structure", "Coolant"]
+    display_name: str
+    positions: list[float]
+    indices: list[int]
+    bounds_mm: list[float]
+    vertex_count: int
+    triangle_count: int
+
+
+class GeometryProvenance(StrictApiModel):
+    source: str
+    provider: str
+    representation: str
+    coordinate_transform: str
+
+
+class GeometryDesignResponse(StrictApiModel):
+    design: GeometryDesign
+    units: Literal["mm"]
+    provenance: GeometryProvenance
+    bounds_mm: list[float]
+    components: list[GeometryComponentMesh]
+    component_count: int
+    vertex_count: int
+    triangle_count: int
+    generation_ms: float
+    cache_hit: bool

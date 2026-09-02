@@ -20,6 +20,8 @@ from fusion_blanket_twin.api.models import (
     ScalarPredictionMetadataResponse,
     ScalarPredictionRequest,
     ScalarPredictionResponse,
+    GeometryDesignRequest,
+    GeometryDesignResponse,
 )
 from fusion_blanket_twin.api.services import TwinServices, load_twin_services
 from fusion_blanket_twin.surrogate.service import ScalarPredictionService
@@ -47,8 +49,8 @@ def create_app(service_loader: ServiceLoader = load_twin_services) -> FastAPI:
         title="Fusion Blanket Twin API",
         version=API_VERSION,
         description=(
-            "Thin HTTP adapter for scalar predictions from the existing Python twin engine. "
-            "Design coordinates use MCNP centimetres; no scientific 3D fields are served."
+            "Thin HTTP adapter for scalar predictions and parametric component geometry. "
+            "Design coordinates use MCNP centimetres; geometry responses use project millimetres."
         ),
         lifespan=lifespan,
     )
@@ -145,10 +147,40 @@ def create_app(service_loader: ServiceLoader = load_twin_services) -> FastAPI:
                 domain_status=prediction.metadata.domain_status,
                 warning=prediction.metadata.warning,
                 nearest_case=prediction.metadata.nearest_case_id,
+                nearest_design=PredictionDesign(
+                    pz_206=predictor.registry.by_case_id[prediction.metadata.nearest_case_id].primitive_csg.pz_206,
+                    cz_301_radius=predictor.registry.by_case_id[prediction.metadata.nearest_case_id].primitive_csg.cz_301_radius,
+                    units=prediction.metadata.input_units,
+                ),
                 nearest_distance=prediction.metadata.nearest_case_distance,
                 model_name=prediction.metadata.model_name,
                 model_metadata=prediction.metadata.model_metadata,
             ),
+        )
+
+    @application.post("/api/geometry/design", response_model=GeometryDesignResponse)
+    def geometry_design(
+        payload: GeometryDesignRequest,
+        request: Request,
+    ) -> GeometryDesignResponse:
+        service = _geometry_service(request)
+        try:
+            result = service.generate(payload.pz_206, payload.cz_301_radius)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="Parametric geometry rejected the supplied design coordinates.",
+            ) from exc
+        except Exception as exc:
+            LOGGER.exception("Unexpected parametric geometry failure")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Parametric geometry generation failed unexpectedly.",
+            ) from exc
+        return GeometryDesignResponse(
+            **result.payload,
+            generation_ms=result.generation_ms,
+            cache_hit=result.cache_hit,
         )
 
     return application
@@ -166,6 +198,16 @@ def _predictor(request: Request) -> ScalarPredictionService:
             detail="Scalar prediction model is unavailable.",
         )
     return services.scalar_prediction
+
+
+def _geometry_service(request: Request):
+    service = _services(request).geometry
+    if service is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Parametric geometry service is unavailable.",
+        )
+    return service
 
 
 app = create_app()
