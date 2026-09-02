@@ -28,6 +28,7 @@ import type {
   TwinApiStatus,
   VisualizationMode,
   WorkspaceSection,
+  ScientificSlice,
 } from "./twin-types";
 
 export type CameraCommand = {
@@ -61,9 +62,9 @@ interface TwinUiState {
   scientificProbeError: string | null;
   activeFieldId: ScientificFieldId;
   visualizationMode: VisualizationMode;
-  sliceAxis: SliceAxis;
   useLogScale: boolean;
-  slicePositions: Record<SliceAxis, number>;
+  scientificSlices: ScientificSlice[];
+  activeScientificSliceId: string | null;
   selectedComponentId: ComponentId;
   componentVisibility: Record<ComponentId, boolean>;
   componentOpacity: Record<ComponentId, number>;
@@ -83,15 +84,20 @@ interface TwinUiState {
   resetDesign: () => void;
   setActiveField: (id: ScientificFieldId) => void;
   setVisualizationMode: (mode: VisualizationMode) => void;
-  setSliceAxis: (axis: SliceAxis) => void;
+  addScientificSlice: () => void;
+  removeScientificSlice: (id: string) => void;
+  selectScientificSlice: (id: string) => void;
+  setScientificSliceAxis: (id: string, axis: SliceAxis) => void;
+  setScientificSlicePosition: (id: string, value: number) => void;
+  setScientificSliceVisible: (id: string, visible: boolean) => void;
+  setScientificSliceOpacity: (id: string, opacity: number) => void;
+  setAllScientificSliceOpacity: (opacity: number) => void;
   setUseLogScale: (enabled: boolean) => void;
-  setSlicePosition: (axis: SliceAxis, value: number) => void;
-  probeScientificVoxel: (pointMm: [number, number, number]) => Promise<void>;
+  probeScientificVoxel: (sliceId: string, pointMm: [number, number, number]) => Promise<void>;
   clearScientificProbe: () => void;
   selectComponent: (id: ComponentId) => void;
   toggleComponent: (id: ComponentId) => void;
   setComponentOpacity: (id: ComponentId, opacity: number) => void;
-  setScientificSliceOpacity: (opacity: number) => void;
   setSectionViewEnabled: (enabled: boolean) => void;
   setSectionViewAxis: (axis: SliceAxis) => void;
   setSectionViewPosition: (positionMm: number) => void;
@@ -128,9 +134,9 @@ export const useTwinStore = create<TwinUiState>((set, get) => ({
   scientificProbeError: null,
   activeFieldId: mockTwinState.activeFieldId,
   visualizationMode: "Slice",
-  sliceAxis: "Z",
   useLogScale: false,
-  slicePositions: { X: 0, Y: 0, Z: 460.5 },
+  scientificSlices: [],
+  activeScientificSliceId: null,
   selectedComponentId: "breeder",
   componentVisibility: Object.fromEntries(
     mockTwinState.components.map((component: ComponentState) => [component.id, component.visible]),
@@ -207,39 +213,97 @@ export const useTwinStore = create<TwinUiState>((set, get) => ({
     set({ activeFieldId });
     void loadActiveScientificField(activeFieldId as ScientificFieldId, false);
   },
-  setVisualizationMode: (visualizationMode) => set({
-    visualizationMode,
-    scientificProbe: visualizationMode === "Off" ? null : get().scientificProbe,
-    scientificProbeStatus: visualizationMode === "Off" ? "idle" : get().scientificProbeStatus,
+  setVisualizationMode: (visualizationMode) => set((state) => {
+    if (visualizationMode === "Slice" && state.scientificSlices.length === 0 && state.scientificField) {
+      const slice = createScientificSlice(
+        state.scientificField.manifest,
+        "slice-1",
+        state.scientificField.manifest.slicing.default_axis,
+        state.scientificField.manifest.slicing.axes[state.scientificField.manifest.slicing.default_axis].default_position_mm,
+        state.scientificSliceOpacity,
+      );
+      return { visualizationMode, scientificSlices: [slice], activeScientificSliceId: slice.id, scientificProbe: null, scientificProbeStatus: "idle" };
+    }
+    return {
+      visualizationMode,
+      scientificProbe: visualizationMode === "Off" ? null : state.scientificProbe,
+      scientificProbeStatus: visualizationMode === "Off" ? "idle" : state.scientificProbeStatus,
+    };
   }),
-  setSliceAxis: (sliceAxis) => set((state) => ({
-    sliceAxis,
-    scientificProbe: null,
-    scientificProbeStatus: "idle",
-    slicePositions: state.scientificField
-      ? {
-          ...state.slicePositions,
-          [sliceAxis]: selectedLayer(
-            state.scientificField.manifest,
-            sliceAxis,
-            state.slicePositions[sliceAxis],
-          ).center_mm,
-        }
-      : state.slicePositions,
+  addScientificSlice: () => set((state) => {
+    if (!state.scientificField || state.scientificSlices.length >= MAX_SCIENTIFIC_SLICES) {
+      return { scientificFieldError: `Maximum of ${MAX_SCIENTIFIC_SLICES} scientific slices reached.` };
+    }
+    const active = state.scientificSlices.find((slice) => slice.id === state.activeScientificSliceId);
+    const axis = active?.axis ?? "Z";
+    const position = active?.requestedPositionMm ?? state.scientificField.manifest.slicing.axes[axis].default_position_mm;
+    const slice = createScientificSlice(state.scientificField.manifest, nextSliceId(state.scientificSlices), axis, position, state.scientificSliceOpacity);
+    return {
+      scientificSlices: [...state.scientificSlices, slice],
+      activeScientificSliceId: slice.id,
+      scientificFieldError: null,
+      scientificProbe: null,
+      scientificProbeStatus: "idle",
+    };
+  }),
+  removeScientificSlice: (id) => set((state) => {
+    if (state.scientificSlices.length <= 1) return state;
+    const index = state.scientificSlices.findIndex((slice) => slice.id === id);
+    if (index < 0) return state;
+    const scientificSlices = state.scientificSlices.filter((slice) => slice.id !== id);
+    const activeScientificSliceId = state.activeScientificSliceId === id
+      ? scientificSlices[Math.max(0, index - 1)]?.id ?? scientificSlices[0]?.id ?? null
+      : state.activeScientificSliceId;
+    return {
+      scientificSlices,
+      activeScientificSliceId,
+      scientificProbe: state.scientificProbe?.sliceId === id ? null : state.scientificProbe,
+      scientificProbeStatus: state.scientificProbe?.sliceId === id ? "idle" : state.scientificProbeStatus,
+    };
+  }),
+  selectScientificSlice: (id) => set((state) => state.scientificSlices.some((slice) => slice.id === id)
+    ? { activeScientificSliceId: id }
+    : state),
+  setScientificSliceAxis: (id, axis) => set((state) => {
+    if (!state.scientificField) return state;
+    return {
+      scientificSlices: state.scientificSlices.map((slice) => slice.id === id
+        ? createScientificSlice(state.scientificField!.manifest, id, axis, state.scientificField!.manifest.slicing.axes[axis].default_position_mm, slice.opacity, slice.visible, slice.label)
+        : slice),
+      scientificProbe: state.scientificProbe?.sliceId === id ? null : state.scientificProbe,
+      scientificProbeStatus: state.scientificProbe?.sliceId === id ? "idle" : state.scientificProbeStatus,
+    };
+  }),
+  setScientificSlicePosition: (id, value) => set((state) => {
+    if (!state.scientificField) return state;
+    return {
+      scientificSlices: state.scientificSlices.map((slice) => slice.id === id
+        ? createScientificSlice(state.scientificField!.manifest, id, slice.axis, value, slice.opacity, slice.visible, slice.label)
+        : slice),
+      scientificProbe: state.scientificProbe?.sliceId === id ? null : state.scientificProbe,
+      scientificProbeStatus: state.scientificProbe?.sliceId === id ? "idle" : state.scientificProbeStatus,
+    };
+  }),
+  setScientificSliceVisible: (id, visible) => set((state) => ({
+    scientificSlices: state.scientificSlices.map((slice) => slice.id === id ? { ...slice, visible } : slice),
+  })),
+  setScientificSliceOpacity: (id, opacity) => set((state) => ({
+    scientificSlices: state.scientificSlices.map((slice) => slice.id === id ? { ...slice, opacity: clampSliceOpacity(opacity) } : slice),
   })),
   setUseLogScale: (useLogScale) => set({ useLogScale }),
-  setSlicePosition: (axis, value) => set((state) => ({
-    slicePositions: { ...state.slicePositions, [axis]: value },
-    scientificProbe: null,
-    scientificProbeStatus: "idle",
+  setAllScientificSliceOpacity: (opacity) => set((state) => ({
+    scientificSliceOpacity: clampSliceOpacity(opacity),
+    scientificSlices: state.scientificSlices.map((slice) => ({ ...slice, opacity: clampSliceOpacity(opacity) })),
   })),
-  probeScientificVoxel: async (pointMm) => {
+  probeScientificVoxel: async (sliceId, pointMm) => {
     const state = get();
     if (!state.scientificField || state.visualizationMode !== "Slice" || state.scientificFieldStatus === "error") return;
+    const slice = state.scientificSlices.find((item) => item.id === sliceId);
+    if (!slice || !slice.visible) return;
     const indices = voxelFromPoint(
       state.scientificField.manifest,
-      state.sliceAxis,
-      state.slicePositions[state.sliceAxis],
+      slice.axis,
+      slice.requestedPositionMm,
       pointMm,
     );
     if (!indices) {
@@ -253,7 +317,7 @@ export const useTwinStore = create<TwinUiState>((set, get) => ({
         state.scientificField.manifest,
         state.scientificField.valuesByField,
       );
-      const probe = buildVoxelProbe(state.scientificField.manifest, valuesByField, indices);
+      const probe = buildVoxelProbe(state.scientificField.manifest, valuesByField, indices, sliceId, slice.axis, slice.label);
       set((latest) => ({
         scientificField: latest.scientificField ? { ...latest.scientificField, valuesByField } : latest.scientificField,
         scientificProbe: probe,
@@ -280,7 +344,6 @@ export const useTwinStore = create<TwinUiState>((set, get) => ({
   setComponentOpacity: (id, opacity) => set((state) => ({
     componentOpacity: { ...state.componentOpacity, [id]: Math.max(0.15, Math.min(1, opacity)) },
   })),
-  setScientificSliceOpacity: (opacity) => set({ scientificSliceOpacity: Math.max(0.25, Math.min(1, opacity)) }),
   setSectionViewEnabled: (sectionViewEnabled) => set({ sectionViewEnabled }),
   setSectionViewAxis: (sectionViewAxis) => set({ sectionViewAxis }),
   setSectionViewPosition: (sectionViewPositionMm) => set({ sectionViewPositionMm }),
@@ -300,12 +363,10 @@ async function initializeScientificState(): Promise<void> {
       scientificFieldStatus: "loading-scalars",
       scientificFieldError: null,
       scientificLoadMetrics: metrics,
-      slicePositions: {
-        ...state.slicePositions,
-        X: manifest.slicing.axes.X.default_position_mm,
-        Y: manifest.slicing.axes.Y.default_position_mm,
-        Z: manifest.slicing.axes.Z.default_position_mm,
-      },
+      scientificSlices: state.scientificSlices.length > 0
+        ? state.scientificSlices
+        : [createScientificSlice(manifest, "slice-1", manifest.slicing.default_axis, manifest.slicing.axes[manifest.slicing.default_axis].default_position_mm, state.scientificSliceOpacity)],
+      activeScientificSliceId: state.activeScientificSliceId ?? (state.scientificSlices.length > 0 ? state.scientificSlices[0].id : "slice-1"),
     }));
     await loadActiveScientificField(manifest.default_field_key, true);
   } catch (error) {
@@ -408,4 +469,41 @@ function isBackendUnavailable(error: unknown): boolean {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Scalar prediction failed.";
+}
+
+export const MAX_SCIENTIFIC_SLICES = 6;
+
+function clampSliceOpacity(opacity: number) {
+  return Math.max(0.25, Math.min(1, opacity));
+}
+
+function nextSliceId(slices: ScientificSlice[]) {
+  const used = new Set(slices.map((slice) => slice.id));
+  let index = slices.length + 1;
+  while (used.has(`slice-${index}`)) index += 1;
+  return `slice-${index}`;
+}
+
+function createScientificSlice(
+  manifest: ScientificFieldData["manifest"],
+  id: string,
+  axis: SliceAxis,
+  requestedPositionMm: number,
+  opacity: number,
+  visible = true,
+  label?: string,
+): ScientificSlice {
+  const layer = selectedLayer(manifest, axis, requestedPositionMm);
+  return {
+    id,
+    axis,
+    requestedPositionMm,
+    layerIndex: layer.index,
+    lowerBoundMm: layer.bounds_mm[0],
+    upperBoundMm: layer.bounds_mm[1],
+    centerMm: layer.center_mm,
+    visible,
+    opacity: clampSliceOpacity(opacity),
+    label: label ?? id,
+  };
 }

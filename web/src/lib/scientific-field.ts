@@ -129,6 +129,9 @@ export interface ScientificFieldData {
 }
 
 export interface ScientificVoxelProbe {
+  sliceId: string;
+  sliceAxis: SliceAxis;
+  sliceLabel: string;
   indices: { i: number; j: number; k: number };
   boundsMm: { x: [number, number]; y: [number, number]; z: [number, number] };
   centerMm: [number, number, number];
@@ -363,6 +366,9 @@ export function buildVoxelProbe(
   manifest: ScientificFieldManifest,
   valuesByField: Partial<Record<ScientificFieldId, Float32Array>>,
   indices: { i: number; j: number; k: number },
+  sliceId = "slice-1",
+  sliceAxis: SliceAxis = "Z",
+  sliceLabel = sliceId,
 ): ScientificVoxelProbe {
   const x = manifest.mesh.axis_boundaries_mm.x;
   const y = manifest.mesh.axis_boundaries_mm.y;
@@ -375,6 +381,9 @@ export function buildVoxelProbe(
   })) as Record<ScientificFieldId, number>;
   const neutronPlusPhoton = values.neutron_heating + values.photon_heating;
   return {
+    sliceId,
+    sliceAxis,
+    sliceLabel,
     indices,
     boundsMm: {
       x: [x[indices.i], x[indices.i + 1]],

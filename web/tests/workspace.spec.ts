@@ -379,6 +379,81 @@ test("a missing scientific asset does not crash the real GLB or Twin API", async
   expect(pageErrors, `uncaught page errors:\n${pageErrors.join("\n")}`).toEqual([]);
 });
 
+test("the scientific slice manager supports independent multi-axis and same-axis raw-cell slices", async ({ page }) => {
+  const consoleErrors: string[] = [];
+  const pageErrors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") consoleErrors.push(message.text());
+  });
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await page.goto("/");
+  await expect(page.getByTestId("scientific-field-ready")).toBeAttached({ timeout: 15_000 });
+  await page.getByTestId("nav-neutronics").click();
+  await expect(page.getByTestId("scientific-slice-manager")).toBeVisible();
+  await expect(page.getByTestId("scientific-field-ready")).toHaveAttribute("data-slice-count", "1");
+  await expect(page.getByTestId("scientific-slice-slice-1")).toHaveAttribute("data-slice-axis", "Z");
+
+  await page.getByTestId("add-scientific-slice").click();
+  await expect(page.getByTestId("scientific-field-ready")).toHaveAttribute("data-slice-count", "2");
+  await expect(page.getByTestId("scientific-slice-slice-2")).toHaveAttribute("data-slice-axis", "Z");
+  await expect(page.getByTestId("scientific-slice-row-slice-2")).toHaveClass(/is-active/);
+
+  const rowOne = page.getByTestId("scientific-slice-row-slice-1");
+  const rowTwo = page.getByTestId("scientific-slice-row-slice-2");
+  await rowOne.getByTestId("scientific-slice-slice-1-axis-y").click();
+  await expect(page.getByTestId("scientific-slice-slice-1")).toHaveAttribute("data-slice-axis", "Y");
+  await expect(page.getByTestId("scientific-slice-slice-2")).toHaveAttribute("data-slice-axis", "Z");
+  await rowTwo.getByRole("slider", { name: "slice-2 position" }).press("End");
+  const rowOneCenter = await page.getByTestId("scientific-slice-slice-1").getAttribute("data-slice-center-mm");
+  await expect(page.getByTestId("scientific-slice-slice-2")).not.toHaveAttribute("data-slice-center-mm", rowOneCenter ?? "");
+
+  await page.getByTestId("add-scientific-slice").click();
+  const rowThree = page.getByTestId("scientific-slice-row-slice-3");
+  await expect(page.getByTestId("scientific-field-ready")).toHaveAttribute("data-slice-count", "3");
+  await rowThree.getByTestId("scientific-slice-slice-3-axis-x").click();
+  await expect(page.getByTestId("scientific-slice-slice-3")).toHaveAttribute("data-slice-axis", "X");
+  await expect(page.getByTestId("scientific-slice-slice-1")).toHaveAttribute("data-slice-axis", "Y");
+  await expect(page.getByTestId("scientific-slice-slice-2")).toHaveAttribute("data-slice-axis", "Z");
+  await expect(page.getByTestId("scientific-field-ready")).toHaveAttribute("data-visible-slice-count", "3");
+
+  await rowTwo.getByTestId("scientific-slice-slice-2-axis-z").click();
+  await rowThree.getByTestId("scientific-slice-slice-3-axis-z").click();
+  const sliceThreeCenter = await page.getByTestId("scientific-slice-slice-3").getAttribute("data-slice-center-mm");
+  await rowTwo.getByRole("slider", { name: "slice-2 position" }).press("Home");
+  await expect(page.getByTestId("scientific-slice-slice-3")).toHaveAttribute("data-slice-center-mm", sliceThreeCenter ?? "");
+  await rowTwo.getByTestId("remove-scientific-slice-slice-2").click();
+  await expect(page.getByTestId("scientific-field-ready")).toHaveAttribute("data-slice-count", "2");
+  await expect(page.getByTestId("scientific-slice-slice-2")).toHaveCount(0);
+  await expect(page.getByTestId("scientific-slice-slice-1")).toHaveCount(1);
+  await expect(page.getByTestId("scientific-slice-slice-3")).toHaveCount(1);
+
+  await page.getByTestId("scientific-slice-visible-slice-1").uncheck();
+  await expect(page.getByTestId("scientific-field-ready")).toHaveAttribute("data-visible-slice-count", "1");
+  await page.getByTestId("mode-off").click();
+  await expect(page.getByTestId("scientific-field-ready")).toHaveAttribute("data-visible", "false");
+  await page.getByTestId("mode-slice").click();
+  await expect(page.getByTestId("scientific-field-ready")).toHaveAttribute("data-visible", "true");
+  await expect(page.getByTestId("scientific-field-ready")).toHaveAttribute("data-slice-count", "2");
+
+  await rowThree.getByTestId("select-scientific-slice-slice-3").click();
+  await expect(rowThree).toHaveClass(/is-active/);
+  await rowThree.getByTestId("scientific-slice-slice-3-axis-x").click();
+  await page.getByTestId("probe-layer-center").click();
+  await expect(page.getByTestId("probe-indices")).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByTestId("probe-panel")).toContainText("slice-3 · X");
+
+  await page.getByTestId("field-selector").selectOption("photon_flux");
+  await expect(page.getByTestId("scientific-field-ready")).toHaveAttribute("data-active-field", "photon_flux");
+  await page.getByTestId("log-scale").check();
+  await expect(page.getByTestId("scientific-field-ready")).toHaveAttribute("data-scale-mode", "log");
+  await expect(page.getByTestId("scientific-scalar-bar")).toContainText("1 visible slice");
+  await expect(page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).resolves.toBeLessThanOrEqual(0);
+  expect(consoleErrors, `browser console errors:\n${consoleErrors.join("\n")}`).toEqual([]);
+  expect(pageErrors, `uncaught page errors:\n${pageErrors.join("\n")}`).toEqual([]);
+});
+
 test("geometry section view clips CAD independently from the scientific slice", async ({ page }) => {
   const consoleErrors: string[] = [];
   const pageErrors: string[] = [];

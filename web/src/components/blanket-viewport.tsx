@@ -10,7 +10,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { BLANKET_GEOMETRY_ADAPTER } from "@/lib/blanket-geometry";
 import { mockTwinState } from "@/lib/mock-twin-state";
 import { useTwinStore } from "@/lib/twin-store";
-import { SCIENTIFIC_COLOR_GRADIENT, SCIENTIFIC_ZERO_COLOR, scalarDomain, selectedLayer } from "@/lib/scientific-field";
+import { SCIENTIFIC_COLOR_GRADIENT, SCIENTIFIC_ZERO_COLOR, scalarDomain } from "@/lib/scientific-field";
 
 const BlanketThreeScene = dynamic(
   () => import("@/components/blanket-three-scene").then((module) => module.BlanketThreeScene),
@@ -29,9 +29,11 @@ export function BlanketViewport() {
   const section = useTwinStore((state) => state.section);
   const fieldId = useTwinStore((state) => state.activeFieldId);
   const mode = useTwinStore((state) => state.visualizationMode);
-  const axis = useTwinStore((state) => state.sliceAxis);
+  const scientificSlices = useTwinStore((state) => state.scientificSlices);
+  const activeScientificSliceId = useTwinStore((state) => state.activeScientificSliceId);
+  const activeScientificSlice = scientificSlices.find((slice) => slice.id === activeScientificSliceId) ?? scientificSlices[0] ?? null;
+  const axis = activeScientificSlice?.axis ?? "Z";
   const log = useTwinStore((state) => state.useLogScale);
-  const slicePositions = useTwinStore((state) => state.slicePositions);
   const geometryStatus = useTwinStore((state) => state.geometryStatus);
   const geometry = useTwinStore((state) => state.geometry);
   const sectionViewEnabled = useTwinStore((state) => state.sectionViewEnabled);
@@ -50,8 +52,8 @@ export function BlanketViewport() {
   const field = scientificField?.manifest.fields[fieldId] ?? mockTwinState.fields.find((item) => item.id === fieldId)!;
   const fieldDisplayName = "display_name" in field ? field.display_name : field.displayName;
   const neutronics = section === "neutronics";
-  const scientificLayer = scientificField ? selectedLayer(scientificField.manifest, axis, slicePositions[axis]) : null;
-  const scientificLayerIndex = scientificLayer?.index ?? null;
+  const scientificLayer = activeScientificSlice;
+  const scientificLayerIndex = scientificLayer?.layerIndex ?? null;
   const activeRecord = scientificField?.manifest.fields[fieldId] ?? null;
   const sectionBounds = geometry?.bounds_mm?.length === 6
     ? geometry.bounds_mm
@@ -178,7 +180,8 @@ export function BlanketViewport() {
               </div>
             </div>
             <div className="scalar-zero-key"><i style={{ background: SCIENTIFIC_ZERO_COLOR }} /><span>Zero / nonpositive hidden</span></div>
-            <small>{scientificLayer ? `${axis} layer ${scientificLayer.bounds_mm[0].toFixed(1)}–${scientificLayer.bounds_mm[1].toFixed(1)} mm · center ${scientificLayer.center_mm.toFixed(1)} mm` : `${scaleLabel} · raw cell values`}</small>
+            <small>{scientificLayer ? `${axis} layer ${scientificLayer.lowerBoundMm.toFixed(1)}–${scientificLayer.upperBoundMm.toFixed(1)} mm · center ${scientificLayer.centerMm.toFixed(1)} mm` : `${scaleLabel} · raw cell values`}</small>
+            <small>{scientificSlices.filter((slice) => slice.visible).length} visible slice{scientificSlices.filter((slice) => slice.visible).length === 1 ? "" : "s"} · raw cell values</small>
             {log && <small>Positive range starts at {activeRecord.positive_minimum?.toExponential(2)}</small>}
           </div>
         )}
@@ -217,14 +220,17 @@ export function BlanketViewport() {
           data-active-field={fieldId}
           data-slice-axis={axis}
           data-scale-mode={log ? "log" : "linear"}
-          data-position-mm={slicePositions[axis].toFixed(1)}
-          data-z-mm={slicePositions.Z.toFixed(1)}
+          data-position-mm={scientificLayer?.requestedPositionMm.toFixed(1) ?? "unknown"}
+          data-z-mm={scientificSlices.find((slice) => slice.axis === "Z")?.requestedPositionMm.toFixed(1) ?? "unknown"}
           data-layer={scientificLayerIndex}
           data-z-layer={axis === "Z" ? scientificLayerIndex : "inactive"}
-          data-layer-bounds={scientificLayer ? scientificLayer.bounds_mm.join(",") : "unknown"}
-          data-z-layer-bounds={axis === "Z" && scientificLayer ? scientificLayer.bounds_mm.join(",") : "inactive"}
-          data-rendered-mm={scientificLayer?.center_mm.toFixed(1) ?? "unknown"}
-          data-rendered-z-mm={scientificLayer?.center_mm.toFixed(1) ?? "unknown"}
+          data-layer-bounds={scientificLayer ? `${scientificLayer.lowerBoundMm},${scientificLayer.upperBoundMm}` : "unknown"}
+          data-z-layer-bounds={axis === "Z" && scientificLayer ? `${scientificLayer.lowerBoundMm},${scientificLayer.upperBoundMm}` : "inactive"}
+          data-rendered-mm={scientificLayer?.centerMm.toFixed(1) ?? "unknown"}
+          data-rendered-z-mm={scientificLayer?.centerMm.toFixed(1) ?? "unknown"}
+          data-slice-count={scientificSlices.length}
+          data-visible-slice-count={scientificSlices.filter((slice) => slice.visible).length}
+          data-active-slice-id={activeScientificSliceId ?? "unknown"}
           data-visible={neutronics && mode === "Slice"}
           data-load-ms={scientificMetrics?.totalMs?.toFixed(1) ?? "unknown"}
           data-metadata-ms={scientificMetrics?.metadataMs?.toFixed(1) ?? "unknown"}
@@ -238,6 +244,20 @@ export function BlanketViewport() {
           data-scalar-domain={activeRecord ? scalarDomain(activeRecord, log ? "log" : "linear").join(",") : "unknown"}
         />
       )}
+      {scientificField && scientificStatus === "ready" && scientificSlices.map((slice) => (
+        <span
+          key={slice.id}
+          className="geometry-diagnostics"
+          data-testid={`scientific-slice-${slice.id}`}
+          data-slice-id={slice.id}
+          data-slice-axis={slice.axis}
+          data-slice-layer={slice.layerIndex}
+          data-slice-center-mm={slice.centerMm.toFixed(2)}
+          data-slice-bounds-mm={`${slice.lowerBoundMm},${slice.upperBoundMm}`}
+          data-slice-visible={slice.visible}
+          data-slice-opacity={slice.opacity}
+        />
+      ))}
       <div className="viewport-footer">
         <span>PROJECT AXES: +Z = TOKAMAK +R · Z=0 PLASMA-FACING ARMOR</span>
         <span>SOURCE / DISPLAY: MM</span>

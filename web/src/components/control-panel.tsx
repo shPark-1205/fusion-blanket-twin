@@ -1,15 +1,15 @@
 "use client";
 
-import { AlertTriangle, Check, CircleOff, Database, Eye, EyeOff, FlaskConical, RotateCcw, ScanLine } from "lucide-react";
+import { AlertTriangle, Check, CircleOff, Database, Eye, EyeOff, FlaskConical, Plus, RotateCcw, ScanLine, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { BLANKET_GEOMETRY_ADAPTER } from "@/lib/blanket-geometry";
 import { mockTwinState } from "@/lib/mock-twin-state";
-import { useTwinStore } from "@/lib/twin-store";
-import type { ScientificFieldId, SliceAxis, VisualizationMode } from "@/lib/twin-types";
-import { axisBoundaries, selectedLayer } from "@/lib/scientific-field";
+import { MAX_SCIENTIFIC_SLICES, useTwinStore } from "@/lib/twin-store";
+import type { ScientificFieldId, ScientificSlice, SliceAxis, VisualizationMode } from "@/lib/twin-types";
+import { axisBoundaries } from "@/lib/scientific-field";
 
 const sectionMeta = {
   overview: ["SYSTEM", "Twin overview"],
@@ -183,12 +183,12 @@ function GeometrySectionControls() {
 
 function ScientificDisplayControls() {
   const opacity = useTwinStore((state) => state.scientificSliceOpacity);
-  const setOpacity = useTwinStore((state) => state.setScientificSliceOpacity);
+  const setOpacity = useTwinStore((state) => state.setAllScientificSliceOpacity);
   return (
     <div className="panel-section display-controls" data-testid="scientific-display-controls">
       <div className="section-label">SCIENTIFIC DISPLAY</div>
       <label className="opacity-control">
-        <span><strong>Slice opacity</strong><output data-testid="scientific-slice-opacity">{Math.round(opacity * 100)}%</output></span>
+        <span><strong>All-slice opacity</strong><output data-testid="scientific-slice-opacity">{Math.round(opacity * 100)}%</output></span>
         <input
           type="range"
           min="25"
@@ -201,6 +201,84 @@ function ScientificDisplayControls() {
         />
       </label>
       <p className="control-help">Visualization only; raw MCNP values and probe data are unchanged.</p>
+    </div>
+  );
+}
+
+function ScientificSliceManager({
+  slices,
+  activeSliceId,
+  onAdd,
+  onRemove,
+  onSelect,
+  onAxis,
+  onPosition,
+  onVisible,
+  onOpacity,
+}: {
+  slices: ScientificSlice[];
+  activeSliceId: string | null;
+  onAdd: () => void;
+  onRemove: (id: string) => void;
+  onSelect: (id: string) => void;
+  onAxis: (id: string, axis: SliceAxis) => void;
+  onPosition: (id: string, value: number) => void;
+  onVisible: (id: string, visible: boolean) => void;
+  onOpacity: (id: string, opacity: number) => void;
+}) {
+  const scientificField = useTwinStore((state) => state.scientificField);
+  return (
+    <div className="panel-section scientific-slice-manager" data-testid="scientific-slice-manager">
+      <div className="slice-manager-heading">
+        <div>
+          <div className="section-label">SLICE MANAGER</div>
+          <p>{slices.length} of {MAX_SCIENTIFIC_SLICES} configured · raw cell layers</p>
+        </div>
+        <Button variant="outline" size="sm" onClick={onAdd} disabled={!scientificField || slices.length >= MAX_SCIENTIFIC_SLICES} data-testid="add-scientific-slice">
+          <Plus size={13} /> Add Slice
+        </Button>
+      </div>
+      {slices.map((slice, index) => {
+        const bounds = scientificField ? axisBoundaries(scientificField.manifest, slice.axis) : [0, 921];
+        const minimum = bounds[0];
+        const maximum = bounds.at(-1)!;
+        return (
+          <div className={`scientific-slice-row ${activeSliceId === slice.id ? "is-active" : ""}`} key={slice.id} data-testid={`scientific-slice-row-${slice.id}`}>
+            <div className="scientific-slice-row-heading">
+              <button type="button" className="scientific-slice-select" onClick={() => onSelect(slice.id)} aria-pressed={activeSliceId === slice.id} data-testid={`select-scientific-slice-${slice.id}`}>
+                <strong>Slice {index + 1}</strong>
+                <span>{slice.axis} · {slice.lowerBoundMm.toFixed(1)}–{slice.upperBoundMm.toFixed(1)} mm</span>
+              </button>
+              <label className="slice-visibility-control">
+                <input type="checkbox" checked={slice.visible} onChange={(event) => onVisible(slice.id, event.target.checked)} aria-label={`${slice.visible ? "Hide" : "Show"} ${slice.id}`} data-testid={`scientific-slice-visible-${slice.id}`} />
+                <span>Visible</span>
+              </label>
+              <Button variant="ghost" size="icon" onClick={() => onRemove(slice.id)} disabled={slices.length <= 1} aria-label={`Remove ${slice.id}`} data-testid={`remove-scientific-slice-${slice.id}`}>
+                <Trash2 size={13} />
+              </Button>
+            </div>
+            <div className="scientific-slice-summary">center {slice.centerMm.toFixed(1)} mm · layer {slice.layerIndex}</div>
+            <ToggleGroup type="single" value={slice.axis} onValueChange={(value) => value && onAxis(slice.id, value as SliceAxis)} className="segmented scientific-slice-axis" aria-label={`${slice.id} axis`}>
+              {(["X", "Y", "Z"] as SliceAxis[]).map((item) => <ToggleGroupItem key={item} value={item} data-testid={`scientific-slice-${slice.id}-axis-${item.toLowerCase()}`}>{item}</ToggleGroupItem>)}
+            </ToggleGroup>
+            <ParameterControl
+              label={`${slice.id} position`}
+              value={slice.requestedPositionMm}
+              min={minimum}
+              max={maximum}
+              step={1}
+              onChange={(value) => onPosition(slice.id, value)}
+              testId={`scientific-slice-position-${slice.id}`}
+              unit="mm"
+            />
+            <label className="opacity-control slice-opacity-control">
+              <span><strong>Opacity</strong><output>{Math.round(slice.opacity * 100)}%</output></span>
+              <input type="range" min="25" max="100" step="5" value={Math.round(slice.opacity * 100)} aria-label={`${slice.id} opacity`} data-testid={`scientific-slice-opacity-${slice.id}`} onChange={(event) => onOpacity(slice.id, Number(event.target.value) / 100)} />
+            </label>
+          </div>
+        );
+      })}
+      {slices.length >= MAX_SCIENTIFIC_SLICES && <p className="slice-manager-limit" data-testid="scientific-slice-limit">Maximum of {MAX_SCIENTIFIC_SLICES} scientific slices reached.</p>}
     </div>
   );
 }
@@ -320,14 +398,21 @@ function DesignControls() {
 function NeutronicsControls() {
   const fieldId = useTwinStore((state) => state.activeFieldId);
   const mode = useTwinStore((state) => state.visualizationMode);
-  const axis = useTwinStore((state) => state.sliceAxis);
+  const slices = useTwinStore((state) => state.scientificSlices);
+  const activeSliceId = useTwinStore((state) => state.activeScientificSliceId);
+  const activeSlice = slices.find((slice) => slice.id === activeSliceId) ?? slices[0] ?? null;
+  const axis = activeSlice?.axis ?? "Z";
   const log = useTwinStore((state) => state.useLogScale);
-  const slicePositions = useTwinStore((state) => state.slicePositions);
   const setField = useTwinStore((state) => state.setActiveField);
   const setMode = useTwinStore((state) => state.setVisualizationMode);
-  const setAxis = useTwinStore((state) => state.setSliceAxis);
+  const addSlice = useTwinStore((state) => state.addScientificSlice);
+  const removeSlice = useTwinStore((state) => state.removeScientificSlice);
+  const selectSlice = useTwinStore((state) => state.selectScientificSlice);
+  const setSliceAxis = useTwinStore((state) => state.setScientificSliceAxis);
+  const setSlicePosition = useTwinStore((state) => state.setScientificSlicePosition);
+  const setSliceVisible = useTwinStore((state) => state.setScientificSliceVisible);
+  const setSliceOpacity = useTwinStore((state) => state.setScientificSliceOpacity);
   const setLog = useTwinStore((state) => state.setUseLogScale);
-  const setSlicePosition = useTwinStore((state) => state.setSlicePosition);
   const scientificStatus = useTwinStore((state) => state.scientificFieldStatus);
   const scientificField = useTwinStore((state) => state.scientificField);
   const scientificError = useTwinStore((state) => state.scientificFieldError);
@@ -341,8 +426,8 @@ function NeutronicsControls() {
   const activeCategory = "quantity_type" in active ? active.quantity_type : active.category;
   const activeUnits = "display_units" in active ? active.display_units : active.units;
   const currentBoundaries = scientificField ? axisBoundaries(scientificField.manifest, axis) : [0, 921];
-  const layerMetadata = scientificField ? selectedLayer(scientificField.manifest, axis, slicePositions[axis]) : null;
-  const sliceRange = scientificField ? scientificField.manifest.fields[fieldId].slice_ranges[axis][layerMetadata!.index] : null;
+  const layerMetadata = activeSlice;
+  const sliceRange = scientificField && layerMetadata ? scientificField.manifest.fields[fieldId].slice_ranges[axis][layerMetadata.layerIndex] : null;
   const statusLabel = scientificStatus === "ready"
     ? "Loaded MCNP Simulation"
     : scientificStatus === "error"
@@ -351,7 +436,7 @@ function NeutronicsControls() {
   const displayScale = log ? "Log" : "Linear";
   const logDisabled = !scientificField || !scientificField.manifest.fields[fieldId].log_scale_supported;
   const probeLayerCenter = () => {
-    if (!scientificField || !layerMetadata) return;
+    if (!scientificField || !activeSlice) return;
     const x = axisBoundaries(scientificField.manifest, "X");
     const y = axisBoundaries(scientificField.manifest, "Y");
     const z = axisBoundaries(scientificField.manifest, "Z");
@@ -360,8 +445,8 @@ function NeutronicsControls() {
       (y[0] + y[y.length - 1]) / 2,
       (z[0] + z[z.length - 1]) / 2,
     ];
-    point[axis === "X" ? 0 : axis === "Y" ? 1 : 2] = layerMetadata.center_mm;
-    void probeVoxel(point);
+    point[activeSlice.axis === "X" ? 0 : activeSlice.axis === "Y" ? 1 : 2] = activeSlice.centerMm;
+    void probeVoxel(activeSlice.id, point);
   };
 
   return (
@@ -396,28 +481,39 @@ function NeutronicsControls() {
       </div>
       <div className="panel-section">
         <div className="section-label">SLICE AXIS</div>
-        <ToggleGroup type="single" value={axis} onValueChange={(value) => value && setAxis(value as SliceAxis)} className="segmented" data-testid="slice-axis">
+        <ToggleGroup type="single" value={axis} onValueChange={(value) => value && activeSlice && setSliceAxis(activeSlice.id, value as SliceAxis)} className="segmented" data-testid="slice-axis">
           {(["X", "Y", "Z"] as SliceAxis[]).map((item) => <ToggleGroupItem key={item} value={item} data-testid={`axis-${item.toLowerCase()}`}>{item}</ToggleGroupItem>)}
         </ToggleGroup>
         <ParameterControl
           label={`${axis} position`}
-          value={slicePositions[axis]}
+          value={activeSlice?.requestedPositionMm ?? currentBoundaries[0]}
           min={currentBoundaries[0]}
           max={currentBoundaries.at(-1)!}
           step={1}
-          onChange={(value) => setSlicePosition(axis, value)}
+          onChange={(value) => activeSlice && setSlicePosition(activeSlice.id, value)}
           testId="slice-position"
           unit="mm"
         />
       </div>
+      <ScientificSliceManager
+        slices={slices}
+        activeSliceId={activeSliceId}
+        onAdd={addSlice}
+        onRemove={removeSlice}
+        onSelect={selectSlice}
+        onAxis={setSliceAxis}
+        onPosition={setSlicePosition}
+        onVisible={setSliceVisible}
+        onOpacity={setSliceOpacity}
+      />
       <label className="switch-row">
         <span><strong>Logarithmic scale</strong><small>{logDisabled ? "Unavailable for non-positive-only data" : "Visualization-only · zero cells use the below-range color"}</small></span>
         <input type="checkbox" checked={log && !logDisabled} disabled={logDisabled} onChange={(event) => setLog(event.target.checked)} data-testid="log-scale" />
         <i />
       </label>
-      <MetricRow label="Display state" value={`${mode} · ${axis} · ${slicePositions[axis].toFixed(1)} mm · ${displayScale}`} />
-      <MetricRow label={`Containing ${axis} layer`} value={layerMetadata ? `${layerMetadata.bounds_mm[0].toFixed(1)} – ${layerMetadata.bounds_mm[1].toFixed(1)}` : "Unavailable"} unit={layerMetadata ? "mm" : undefined} />
-      <MetricRow label="Rendered at center" value={layerMetadata ? layerMetadata.center_mm.toFixed(1) : "Unavailable"} unit={layerMetadata ? "mm" : undefined} />
+      <MetricRow label="Display state" value={`${mode} · ${slices.filter((slice) => slice.visible).length}/${slices.length} slices · ${displayScale}`} />
+      <MetricRow label={`Containing ${axis} layer`} value={layerMetadata ? `${layerMetadata.lowerBoundMm.toFixed(1)} – ${layerMetadata.upperBoundMm.toFixed(1)}` : "Unavailable"} unit={layerMetadata ? "mm" : undefined} />
+      <MetricRow label="Rendered at center" value={layerMetadata ? layerMetadata.centerMm.toFixed(1) : "Unavailable"} unit={layerMetadata ? "mm" : undefined} />
       <MetricRow label="Global range" value={scientificField ? `${scientificField.manifest.fields[fieldId].web_range[0].toExponential(3)} – ${scientificField.manifest.fields[fieldId].web_range[1].toExponential(3)}` : "Unavailable"} unit={scientificField ? scientificField.manifest.fields[fieldId].display_units : undefined} />
       <MetricRow label="Slice range" value={sliceRange ? `${sliceRange[0].toExponential(3)} – ${sliceRange[1].toExponential(3)}` : "Unavailable"} unit={sliceRange ? scientificField?.manifest.fields[fieldId].display_units : undefined} />
       <MetricRow label="3D field" value={statusLabel} />
@@ -431,6 +527,7 @@ function NeutronicsControls() {
               <strong data-testid="probe-indices">i {probe.indices.i} · j {probe.indices.j} · k {probe.indices.k}</strong>
               <Button variant="ghost" size="sm" onClick={clearProbe} data-testid="clear-probe">Clear</Button>
             </div>
+            <MetricRow label="Slice" value={`${probe.sliceLabel} · ${probe.sliceAxis}`} />
             <MetricRow label="X interval" value={`${probe.boundsMm.x[0].toFixed(1)} – ${probe.boundsMm.x[1].toFixed(1)}`} unit="mm" />
             <MetricRow label="Y interval" value={`${probe.boundsMm.y[0].toFixed(1)} – ${probe.boundsMm.y[1].toFixed(1)}`} unit="mm" />
             <MetricRow label="Z interval" value={`${probe.boundsMm.z[0].toFixed(1)} – ${probe.boundsMm.z[1].toFixed(1)}`} unit="mm" />
@@ -452,7 +549,7 @@ function NeutronicsControls() {
         ) : probeStatus !== "loading" && probeStatus !== "error" ? (
           <>
             <p>Click the active slice to inspect one raw MCNP voxel.</p>
-            <Button variant="outline" size="sm" onClick={probeLayerCenter} disabled={!scientificField || mode !== "Slice"} data-testid="probe-layer-center">Probe Layer Center</Button>
+            <Button variant="outline" size="sm" onClick={probeLayerCenter} disabled={!scientificField || !activeSlice || mode !== "Slice"} data-testid="probe-layer-center">Probe Layer Center</Button>
           </>
         ) : null}
       </div>

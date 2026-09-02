@@ -95,6 +95,19 @@ export interface FieldMetadata {
   range: [number, number] | null;
 }
 
+export interface ScientificSlice {
+  id: string;
+  axis: SliceAxis;
+  requestedPositionMm: number;
+  layerIndex: number;
+  lowerBoundMm: number;
+  upperBoundMm: number;
+  centerMm: number;
+  visible: boolean;
+  opacity: number;
+  label?: string;
+}
+
 export interface TwinProvenance {
   geometry: GeometrySource;
   scalarKpis: ScalarSource;
