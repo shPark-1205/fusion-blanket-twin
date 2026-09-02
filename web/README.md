@@ -1,18 +1,18 @@
 # Fusion Blanket Digital Twin Web
 
-Web presentation layer for the Fusion Blanket Twin. This Next.js application lives beside the existing Python/PyVista/trame scientific viewer. It renders derived CAD presentation geometry, obtains scalar predictions from a thin FastAPI adapter around the existing Python twin engine, and can load one locally generated MCNP Total Nuclear Heating visualization field.
+Web presentation layer for the Fusion Blanket Twin. This Next.js application lives beside the existing Python/PyVista/trame scientific viewer. It renders derived CAD presentation geometry, obtains scalar predictions from a thin FastAPI adapter around the existing Python twin engine, and can load locally generated MCNP visualization fields.
 
 ## Local development
 
 Requirements: Python 3.12 with `requirements.txt` installed, Node.js 20 or newer, npm, and the local 100-case MCNP inputs/workbook under `data/local/`.
 
-Generate the ignored scientific visualization asset from the authoritative local VTKHDF sample:
+Generate the ignored scientific visualization assets from the authoritative local VTKHDF sample:
 
 ```cmd
 set PYTHONPATH=src&& .venv\Scripts\python.exe scripts\export_web_scientific_field.py
 ```
 
-The command writes `public/scientific/generated/reference-mcnp/nuclear-heating/manifest.json` and `values.f32`. These generated files and the master `data/sample/test.vtkhdf` stay ignored; neither is committed or bundled as source. Then run the two development processes separately from the repository root.
+The command writes `public/scientific/generated/reference-mcnp/manifest.json` plus one Float32 payload for each canonical MCNP field. These generated files and the master `data/sample/test.vtkhdf` stay ignored; neither is committed or bundled as source. Then run the two development processes separately from the repository root.
 
 Terminal 1 — Python Twin API:
 
@@ -63,7 +63,7 @@ Playwright starts both the real Python API and the Next.js development server. I
 - `../src/fusion_blanket_twin/api/` is the HTTP-only adapter; scientific prediction logic remains in `ScalarPredictionService` and `CaseRegistry`.
 - `src/lib/twin-types.ts` defines typed HTTP and presentation contracts.
 - `src/lib/twin-api.ts` is the single configurable native-fetch API client.
-- `src/lib/scientific-field.ts` validates and loads the derived rectilinear cell-grid manifest and Float32 visualization array.
+- `src/lib/scientific-field.ts` validates and loads the derived rectilinear cell-grid manifest, lazily loads Float32 field arrays, caches loaded arrays, maps X/Y/Z slice positions to raw cells, and computes click-based raw voxel probes.
 - `src/lib/mock-twin-state.ts` supplies presentation-only geometry, field-control, and operating-basis state; it does not supply scalar KPIs.
 - `src/lib/twin-store.ts` owns local interaction state and the health → domain → initial-prediction lifecycle.
 - `src/lib/blanket-geometry.ts` owns the GLB path, unit adapter, engineering appearances, and source-name-to-semantic-component mapping.
@@ -78,10 +78,11 @@ The blanket geometry at `public/models/blanket_unit_cell.glb` is a web presentat
 - Workspace navigation is functional in the browser.
 - Design sliders update local selected values and mark prediction pending; Apply Design requests real scalar KPIs from Python.
 - The PZ/CZ design state and scalar prediction state are distinct from the fixed representative GLB. Changing design values does not deform the displayed CAD.
-- Total Nuclear Heating, Z Slice, Z position, and Linear display controls operate on actual MCNP cell data. X/Y, iso-surface, and logarithmic display remain disabled.
+- Neutron Flux, Photon Flux, Neutron Heating, Photon Heating, Total Nuclear Heating, X/Y/Z Slice, Linear, and Log controls operate on actual MCNP cell data. Iso-surface remains disabled.
 - The viewport uses real GLB presentation geometry with orbit, zoom, pan, picking, Reset Camera, Fit Assembly, and fullscreen behavior.
 - Semantic selection, visibility, and opacity update the already-loaded scene without reloading the GLB.
-- The displayed slice uses raw containing-voxel cell values without point interpolation. Its Float32 values are a documented visualization copy; the Float64 VTKHDF remains authoritative.
+- The displayed slice uses raw containing-voxel cell values without point interpolation. Its Float32 values are a documented visualization copy; the Float64 VTKHDF remains authoritative. Log display is visualization-only; zero cells use the below-positive-range color and raw values are unchanged.
+- Clicking the displayed slice performs a raw FMESH voxel probe by axis-boundary lookup, not ray-testing millions of cells. The probe reports i/j/k, physical cell bounds, center, all five canonical field values, and nuclear-heating closure.
 - The loaded field is one fixed reference MCNP simulation. It never follows PZ/CZ scalar-surrogate design changes and is labeled accordingly.
 - Thermal-hydraulics is an explicitly unavailable workspace; no CFX data source is connected.
 - Illustrative plots are static and do not expose invented scientific values through hover interactions.

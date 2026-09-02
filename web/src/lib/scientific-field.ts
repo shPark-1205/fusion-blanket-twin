@@ -1,5 +1,16 @@
-export const SCIENTIFIC_FIELD_MANIFEST_URL =
-  "/scientific/generated/reference-mcnp/nuclear-heating/manifest.json";
+import type { SliceAxis } from "./twin-types";
+
+export const SCIENTIFIC_FIELD_MANIFEST_URL = "/scientific/generated/reference-mcnp/manifest.json";
+
+export const SCIENTIFIC_FIELD_IDS = [
+  "neutron_flux",
+  "photon_flux",
+  "neutron_heating",
+  "photon_heating",
+  "nuclear_heating",
+] as const;
+
+export type ScientificFieldId = (typeof SCIENTIFIC_FIELD_IDS)[number];
 
 export type ScientificFieldStatus =
   | "idle"
@@ -9,9 +20,57 @@ export type ScientificFieldStatus =
   | "ready"
   | "error";
 
+export type ScientificProbeStatus = "idle" | "loading" | "ready" | "error";
+export type ScaleMode = "linear" | "log";
+
+export interface ScientificFieldRecord {
+  key: ScientificFieldId;
+  source_name: string;
+  display_name: string;
+  quantity_type: "Flux" | "Heating";
+  units: string;
+  display_units: string;
+  association: "cell";
+  source_precision: string;
+  web_precision: "Float32";
+  source_range: [number, number];
+  web_range: [number, number];
+  finite_count: number;
+  zero_count: number;
+  positive_minimum: number | null;
+  log_scale_supported: boolean;
+  log_scale_recommended: boolean;
+  values: {
+    url: string;
+    dtype: "float32-le";
+    byte_length: number;
+    scalar_count: number;
+  };
+  precision: {
+    role: string;
+    maximum_absolute_deviation: number;
+    maximum_relative_deviation_nonzero: number;
+    mean_absolute_deviation: number;
+  };
+  slice_ranges: Record<SliceAxis, Array<[number, number]>>;
+  source_slice_ranges: Record<SliceAxis, Array<[number, number]>>;
+  provenance: {
+    kind: "MCNP Simulation";
+    role: string;
+  };
+}
+
+export interface AxisLayer {
+  index: number;
+  bounds_mm: [number, number];
+  center_mm: number;
+}
+
 export interface ScientificFieldManifest {
-  schema: "fusion-blanket-web-cell-field/v1";
+  schema: "fusion-blanket-web-cell-fields/v2";
   dataset_id: string;
+  default_field_key: ScientificFieldId;
+  field_order: ScientificFieldId[];
   provenance: {
     kind: "MCNP Simulation";
     role: string;
@@ -22,17 +81,7 @@ export interface ScientificFieldManifest {
     source_reference: string;
     case_id: string | null;
   };
-  field: {
-    key: "nuclear_heating";
-    source_name: string;
-    display_name: "Total Nuclear Heating";
-    units: "W/cm3";
-    display_units: "W/cm³";
-    association: "cell";
-    source_precision: string;
-    source_range: [number, number];
-    web_range: [number, number];
-  };
+  fields: Record<ScientificFieldId, ScientificFieldRecord>;
   mesh: {
     representation: "exact_rectilinear_voxel_cell_grid";
     point_count: number;
@@ -40,7 +89,9 @@ export interface ScientificFieldManifest {
     point_shape_xyz: [number, number, number];
     cell_shape_zyx: [number, number, number];
     array_order: string;
+    cell_index_order: string;
     axis_boundaries_mm: { x: number[]; y: number[]; z: number[] };
+    axis_metadata: Record<"x" | "y" | "z", { cell_count: number; minimum_spacing_mm: number; maximum_spacing_mm: number; uniform: boolean }>;
     bounds_cm: [number, number, number, number, number, number];
     bounds_mm: [number, number, number, number, number, number];
   };
@@ -51,39 +102,41 @@ export interface ScientificFieldManifest {
     translation_mm: [number, number, number];
     matrix_row_major: number[];
   };
-  values: {
-    url: string;
-    dtype: "float32-le";
-    exported_precision: "Float32";
-    precision_role: string;
-    byte_length: number;
-    scalar_count: number;
-    maximum_absolute_deviation: number;
-    maximum_relative_deviation_nonzero: number;
-    mean_absolute_deviation: number;
-  };
   slicing: {
-    axis: "Z";
-    position_range_mm: [number, number];
-    default_position_mm: number;
+    available_axes: SliceAxis[];
+    default_axis: SliceAxis;
     semantics: string;
-    layer_ranges: Array<[number, number]>;
-    layers: Array<{
-      index: number;
-      bounds_mm: [number, number];
-      center_mm: number;
-      range: [number, number];
-      source_range: [number, number];
-      web_range: [number, number];
-      maximum_absolute_deviation: number;
-      maximum_relative_deviation_nonzero: number;
-    }>;
+    boundary_convention: string;
+    axes: Record<SliceAxis, { position_range_mm: [number, number]; default_position_mm: number; layers: AxisLayer[] }>;
+  };
+  probe: {
+    semantics: string;
+    returns: ScientificFieldId[];
+    boundary_convention: string;
+  };
+  consistency_checks: {
+    nuclear_heating_equals_neutron_plus_photon: {
+      passed: boolean;
+      maximum_absolute_error: number;
+      mean_absolute_error: number;
+    };
   };
 }
 
 export interface ScientificFieldData {
   manifest: ScientificFieldManifest;
-  values: Float32Array;
+  valuesByField: Partial<Record<ScientificFieldId, Float32Array>>;
+}
+
+export interface ScientificVoxelProbe {
+  indices: { i: number; j: number; k: number };
+  boundsMm: { x: [number, number]; y: [number, number]; z: [number, number] };
+  centerMm: [number, number, number];
+  values: Record<ScientificFieldId, number>;
+  nuclearHeatingConsistency: {
+    neutronPlusPhoton: number;
+    difference: number;
+  };
 }
 
 export interface ScientificLoadMetrics {
@@ -94,11 +147,15 @@ export interface ScientificLoadMetrics {
   totalMs: number | null;
   firstRenderMs: number | null;
   sliceUpdateMs: number | null;
+  fieldSwitchMs: number | null;
+  probeMs: number | null;
 }
 
-export async function loadScientificField(
+const loadedFields = new Map<ScientificFieldId, Promise<{ values: Float32Array; metrics: { downloadMs: number; parseMs: number } }>>();
+
+export async function loadScientificManifest(
   onStatus: (status: ScientificFieldStatus) => void,
-): Promise<{ data: ScientificFieldData; metrics: ScientificLoadMetrics }> {
+): Promise<{ manifest: ScientificFieldManifest; metrics: ScientificLoadMetrics }> {
   const totalStarted = performance.now();
   onStatus("loading-metadata");
   const metadataStarted = performance.now();
@@ -111,60 +168,114 @@ export async function loadScientificField(
   const geometryStarted = performance.now();
   validateManifest(manifest);
   const geometryValidationMs = performance.now() - geometryStarted;
-
-  onStatus("loading-scalars");
-  const scalarStarted = performance.now();
-  const valuesUrl = new URL(manifest.values.url, response.url);
-  const valuesResponse = await fetch(valuesUrl, { cache: "no-store" });
-  if (!valuesResponse.ok) throw new Error(`Scientific scalar request failed (${valuesResponse.status}).`);
-  const buffer = await valuesResponse.arrayBuffer();
-  const scalarDownloadMs = performance.now() - scalarStarted;
-  const parseStarted = performance.now();
-  if (buffer.byteLength !== manifest.values.byte_length) {
-    throw new Error(
-      `Scientific scalar byte length ${buffer.byteLength} does not match metadata ${manifest.values.byte_length}.`,
-    );
-  }
-  const values = float32LittleEndian(buffer);
-  if (values.length !== manifest.values.scalar_count) {
-    throw new Error(`Scientific scalar count ${values.length} does not match metadata ${manifest.values.scalar_count}.`);
-  }
-  for (let index = 0; index < values.length; index += 1) {
-    if (!Number.isFinite(values[index])) throw new Error(`Scientific scalar ${index} is not finite.`);
-  }
-  const scalarParseMs = performance.now() - parseStarted;
   return {
-    data: { manifest, values },
+    manifest,
     metrics: {
       metadataMs,
       geometryValidationMs,
-      scalarDownloadMs,
-      scalarParseMs,
+      scalarDownloadMs: null,
+      scalarParseMs: null,
       totalMs: performance.now() - totalStarted,
       firstRenderMs: null,
       sliceUpdateMs: null,
+      fieldSwitchMs: null,
+      probeMs: null,
     },
   };
 }
 
-function validateManifest(manifest: ScientificFieldManifest) {
-  if (manifest.schema !== "fusion-blanket-web-cell-field/v1") throw new Error("Unsupported scientific metadata schema.");
-  if (manifest.field.key !== "nuclear_heating" || manifest.field.association !== "cell") {
-    throw new Error("Expected the Nuclear Heating cell-data field.");
+export async function loadScientificFieldValues(
+  manifest: ScientificFieldManifest,
+  fieldId: ScientificFieldId,
+  onStatus?: (status: ScientificFieldStatus) => void,
+): Promise<{ values: Float32Array; metrics: { downloadMs: number; parseMs: number }; cached: boolean }> {
+  const cached = loadedFields.get(fieldId);
+  if (cached) return { ...(await cached), cached: true };
+  onStatus?.("loading-scalars");
+  const loading = fetchFieldValues(manifest, fieldId);
+  loadedFields.set(fieldId, loading);
+  try {
+    return { ...(await loading), cached: false };
+  } catch (error) {
+    loadedFields.delete(fieldId);
+    throw error;
   }
+}
+
+export async function loadAllScientificFieldValues(
+  manifest: ScientificFieldManifest,
+  existing: Partial<Record<ScientificFieldId, Float32Array>>,
+  onStatus?: (status: ScientificFieldStatus) => void,
+) {
+  const started = performance.now();
+  const valuesByField: Partial<Record<ScientificFieldId, Float32Array>> = { ...existing };
+  let downloadMs = 0;
+  let parseMs = 0;
+  for (const fieldId of manifest.field_order) {
+    if (valuesByField[fieldId]) continue;
+    const result = await loadScientificFieldValues(manifest, fieldId, onStatus);
+    valuesByField[fieldId] = result.values;
+    downloadMs += result.cached ? 0 : result.metrics.downloadMs;
+    parseMs += result.cached ? 0 : result.metrics.parseMs;
+  }
+  return { valuesByField, metrics: { downloadMs, parseMs, totalMs: performance.now() - started } };
+}
+
+async function fetchFieldValues(manifest: ScientificFieldManifest, fieldId: ScientificFieldId) {
+  const field = manifest.fields[fieldId];
+  if (!field) throw new Error(`Scientific field '${fieldId}' is not declared in the manifest.`);
+  const scalarStarted = performance.now();
+  const valuesUrl = new URL(field.values.url, new URL(SCIENTIFIC_FIELD_MANIFEST_URL, window.location.href));
+  const valuesResponse = await fetch(valuesUrl, { cache: "no-store" });
+  if (!valuesResponse.ok) {
+    throw new Error(`${field.display_name} scalar request failed (${valuesResponse.status}).`);
+  }
+  const buffer = await valuesResponse.arrayBuffer();
+  const downloadMs = performance.now() - scalarStarted;
+  const parseStarted = performance.now();
+  if (buffer.byteLength !== field.values.byte_length) {
+    throw new Error(
+      `${field.display_name} byte length ${buffer.byteLength} does not match metadata ${field.values.byte_length}.`,
+    );
+  }
+  const values = float32LittleEndian(buffer);
+  if (values.length !== field.values.scalar_count) {
+    throw new Error(`${field.display_name} scalar count ${values.length} does not match metadata ${field.values.scalar_count}.`);
+  }
+  for (let index = 0; index < values.length; index += 1) {
+    if (!Number.isFinite(values[index])) throw new Error(`${field.display_name} scalar ${index} is not finite.`);
+  }
+  return { values, metrics: { downloadMs, parseMs: performance.now() - parseStarted } };
+}
+
+function validateManifest(manifest: ScientificFieldManifest) {
+  if (manifest.schema !== "fusion-blanket-web-cell-fields/v2") throw new Error("Unsupported scientific metadata schema.");
   if (manifest.mesh.representation !== "exact_rectilinear_voxel_cell_grid") {
     throw new Error("Expected an exact rectilinear voxel cell grid.");
   }
-  if (manifest.values.dtype !== "float32-le") throw new Error("Expected little-endian Float32 scientific values.");
   const { x, y, z } = manifest.mesh.axis_boundaries_mm;
   const [nz, ny, nx] = manifest.mesh.cell_shape_zyx;
   if (x.length !== nx + 1 || y.length !== ny + 1 || z.length !== nz + 1) {
     throw new Error("Scientific axis boundaries do not match the cell shape.");
   }
-  if (nx * ny * nz !== manifest.mesh.cell_count || manifest.mesh.cell_count !== manifest.values.scalar_count) {
+  if (nx * ny * nz !== manifest.mesh.cell_count) {
     throw new Error("Scientific cell counts are inconsistent.");
   }
-  if (manifest.slicing.layers.length !== nz) throw new Error("Scientific Z-layer metadata is incomplete.");
+  for (const fieldId of SCIENTIFIC_FIELD_IDS) {
+    const field = manifest.fields[fieldId];
+    if (!field) throw new Error(`Scientific field '${fieldId}' is missing.`);
+    if (field.key !== fieldId || field.association !== "cell") throw new Error(`Invalid field metadata for ${fieldId}.`);
+    if (field.values.dtype !== "float32-le") throw new Error(`Expected little-endian Float32 values for ${field.display_name}.`);
+    if (field.values.scalar_count !== manifest.mesh.cell_count) throw new Error(`${field.display_name} scalar count is inconsistent.`);
+    for (const axis of ["X", "Y", "Z"] as SliceAxis[]) {
+      if (field.slice_ranges[axis].length !== cellCountForAxis(manifest, axis)) {
+        throw new Error(`${field.display_name} ${axis} slice metadata is incomplete.`);
+      }
+      if (field.source_slice_ranges[axis].length !== cellCountForAxis(manifest, axis)) {
+        throw new Error(`${field.display_name} source ${axis} slice metadata is incomplete.`);
+      }
+    }
+  }
   for (const axis of [x, y, z]) {
     if (!axis.every((value, index) => Number.isFinite(value) && (index === 0 || value > axis[index - 1]))) {
       throw new Error("Scientific axis boundaries must be finite and strictly increasing.");
@@ -181,7 +292,15 @@ function float32LittleEndian(buffer: ArrayBuffer) {
   return values;
 }
 
-export function zCellIndex(boundaries: number[], positionMm: number) {
+export function axisKey(axis: SliceAxis): "x" | "y" | "z" {
+  return axis.toLowerCase() as "x" | "y" | "z";
+}
+
+export function axisBoundaries(manifest: ScientificFieldManifest, axis: SliceAxis) {
+  return manifest.mesh.axis_boundaries_mm[axisKey(axis)];
+}
+
+export function cellIndex(boundaries: number[], positionMm: number) {
   if (positionMm <= boundaries[0]) return 0;
   if (positionMm >= boundaries.at(-1)!) return boundaries.length - 2;
   let low = 0;
@@ -194,20 +313,120 @@ export function zCellIndex(boundaries: number[], positionMm: number) {
   return low;
 }
 
+export function containingCellIndex(boundaries: number[], positionMm: number) {
+  if (positionMm < boundaries[0] || positionMm > boundaries.at(-1)!) return null;
+  if (positionMm === boundaries.at(-1)!) return boundaries.length - 2;
+  let low = 0;
+  let high = boundaries.length - 1;
+  while (low + 1 < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (boundaries[middle] <= positionMm) low = middle;
+    else high = middle;
+  }
+  return low;
+}
+
+export function selectedLayer(manifest: ScientificFieldManifest, axis: SliceAxis, positionMm: number): AxisLayer {
+  const index = cellIndex(axisBoundaries(manifest, axis), positionMm);
+  return manifest.slicing.axes[axis].layers[index];
+}
+
+export function cellCountForAxis(manifest: ScientificFieldManifest, axis: SliceAxis) {
+  const [nz, ny, nx] = manifest.mesh.cell_shape_zyx;
+  if (axis === "X") return nx;
+  if (axis === "Y") return ny;
+  return nz;
+}
+
+export function linearCellIndex(manifest: ScientificFieldManifest, indices: { i: number; j: number; k: number }) {
+  const [, ny, nx] = manifest.mesh.cell_shape_zyx;
+  return indices.k * ny * nx + indices.j * nx + indices.i;
+}
+
+export function voxelFromPoint(
+  manifest: ScientificFieldManifest,
+  axis: SliceAxis,
+  selectedPositionMm: number,
+  pointMm: [number, number, number],
+) {
+  const selected = selectedLayer(manifest, axis, selectedPositionMm);
+  const i = axis === "X" ? selected.index : containingCellIndex(axisBoundaries(manifest, "X"), pointMm[0]);
+  const j = axis === "Y" ? selected.index : containingCellIndex(axisBoundaries(manifest, "Y"), pointMm[1]);
+  const k = axis === "Z" ? selected.index : containingCellIndex(axisBoundaries(manifest, "Z"), pointMm[2]);
+  if (i === null || j === null || k === null) return null;
+  const [nz, ny, nx] = manifest.mesh.cell_shape_zyx;
+  if (i < 0 || i >= nx || j < 0 || j >= ny || k < 0 || k >= nz) return null;
+  return { i, j, k };
+}
+
+export function buildVoxelProbe(
+  manifest: ScientificFieldManifest,
+  valuesByField: Partial<Record<ScientificFieldId, Float32Array>>,
+  indices: { i: number; j: number; k: number },
+): ScientificVoxelProbe {
+  const x = manifest.mesh.axis_boundaries_mm.x;
+  const y = manifest.mesh.axis_boundaries_mm.y;
+  const z = manifest.mesh.axis_boundaries_mm.z;
+  const linear = linearCellIndex(manifest, indices);
+  const values = Object.fromEntries(manifest.field_order.map((fieldId) => {
+    const fieldValues = valuesByField[fieldId];
+    if (!fieldValues) throw new Error(`${manifest.fields[fieldId].display_name} is not loaded for raw voxel probing.`);
+    return [fieldId, fieldValues[linear]];
+  })) as Record<ScientificFieldId, number>;
+  const neutronPlusPhoton = values.neutron_heating + values.photon_heating;
+  return {
+    indices,
+    boundsMm: {
+      x: [x[indices.i], x[indices.i + 1]],
+      y: [y[indices.j], y[indices.j + 1]],
+      z: [z[indices.k], z[indices.k + 1]],
+    },
+    centerMm: [
+      (x[indices.i] + x[indices.i + 1]) / 2,
+      (y[indices.j] + y[indices.j + 1]) / 2,
+      (z[indices.k] + z[indices.k + 1]) / 2,
+    ],
+    values,
+    nuclearHeatingConsistency: {
+      neutronPlusPhoton,
+      difference: values.nuclear_heating - neutronPlusPhoton,
+    },
+  };
+}
+
+export function scalarDomain(field: ScientificFieldRecord, scale: ScaleMode): [number, number] {
+  if (scale === "log" && field.positive_minimum !== null && field.web_range[1] > field.positive_minimum) {
+    return [Math.log10(field.positive_minimum), Math.log10(field.web_range[1])];
+  }
+  return field.web_range;
+}
+
+export function colorScalarValue(value: number, field: ScientificFieldRecord, scale: ScaleMode): [number, number, number] {
+  if (scale === "log") {
+    if (!field.log_scale_supported || field.positive_minimum === null || value <= 0) return sequentialColor(0);
+    const domain = scalarDomain(field, "log");
+    return sequentialColor(normalize(Math.log10(value), domain));
+  }
+  return sequentialColor(normalize(value, field.web_range));
+}
+
+export const SCIENTIFIC_COLOR_GRADIENT =
+  "linear-gradient(to top, rgb(5 16 38), rgb(42 56 115), rgb(28 111 133), rgb(62 157 122), rgb(194 183 79), rgb(252 244 181))";
+
 const COLOR_STOPS = [
   [0, 5, 16, 38],
-  [0.2, 55, 18, 82],
-  [0.4, 126, 36, 95],
-  [0.6, 198, 69, 67],
-  [0.8, 246, 145, 55],
+  [0.22, 42, 56, 115],
+  [0.44, 28, 111, 133],
+  [0.66, 62, 157, 122],
+  [0.84, 194, 183, 79],
   [1, 252, 244, 181],
 ] as const;
 
-export const SCIENTIFIC_COLOR_GRADIENT =
-  "linear-gradient(to top, rgb(5 16 38), rgb(55 18 82), rgb(126 36 95), rgb(198 69 67), rgb(246 145 55), rgb(252 244 181))";
+function normalize(value: number, range: [number, number]) {
+  return range[1] === range[0] ? 0 : Math.max(0, Math.min(1, (value - range[0]) / (range[1] - range[0])));
+}
 
-export function scientificColor(value: number, range: [number, number]): [number, number, number] {
-  const normalized = range[1] === range[0] ? 0 : Math.max(0, Math.min(1, (value - range[0]) / (range[1] - range[0])));
+function sequentialColor(normalized: number): [number, number, number] {
   let upper = 1;
   while (upper < COLOR_STOPS.length && normalized > COLOR_STOPS[upper][0]) upper += 1;
   const right = COLOR_STOPS[Math.min(upper, COLOR_STOPS.length - 1)];

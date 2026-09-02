@@ -10,7 +10,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { cn } from "@/lib/utils";
 import { mockTwinState } from "@/lib/mock-twin-state";
 import { useTwinStore } from "@/lib/twin-store";
-import { SCIENTIFIC_COLOR_GRADIENT, zCellIndex } from "@/lib/scientific-field";
+import { SCIENTIFIC_COLOR_GRADIENT, scalarDomain, selectedLayer } from "@/lib/scientific-field";
 
 const BlanketThreeScene = dynamic(
   () => import("@/components/blanket-three-scene").then((module) => module.BlanketThreeScene),
@@ -85,14 +85,18 @@ export function BlanketViewport() {
   const scientificField = useTwinStore((state) => state.scientificField);
   const scientificError = useTwinStore((state) => state.scientificFieldError);
   const scientificMetrics = useTwinStore((state) => state.scientificLoadMetrics);
-  const field = mockTwinState.fields.find((item) => item.id === fieldId)!;
+  const field = scientificField?.manifest.fields[fieldId] ?? mockTwinState.fields.find((item) => item.id === fieldId)!;
+  const fieldDisplayName = "display_name" in field ? field.display_name : field.displayName;
   const neutronics = section === "neutronics";
-  const scientificLayerIndex = scientificField
-    ? zCellIndex(scientificField.manifest.mesh.axis_boundaries_mm.z, slicePositions.Z)
+  const scientificLayer = scientificField ? selectedLayer(scientificField.manifest, axis, slicePositions[axis]) : null;
+  const scientificLayerIndex = scientificLayer?.index ?? null;
+  const activeRecord = scientificField?.manifest.fields[fieldId] ?? null;
+  const scaleLabel = log ? "Log" : "Linear";
+  const scalarTicks = activeRecord
+    ? log && activeRecord.positive_minimum !== null
+      ? [activeRecord.web_range[1], Math.sqrt(activeRecord.positive_minimum * activeRecord.web_range[1]), activeRecord.positive_minimum]
+      : [activeRecord.web_range[1], (activeRecord.web_range[0] + activeRecord.web_range[1]) / 2, activeRecord.web_range[0]]
     : null;
-  const scientificLayer = scientificLayerIndex === null
-    ? null
-    : scientificField?.manifest.slicing.layers[scientificLayerIndex];
 
   const handleReady = useCallback((readyMetrics: GeometryReadyMetrics) => {
     setMetrics(readyMetrics);
@@ -111,10 +115,10 @@ export function BlanketViewport() {
 
   const displaySummary = neutronics
     ? mode === "Off"
-      ? `${field.displayName} · display off`
+      ? `${fieldDisplayName} · display off`
        : scientificLayer
-         ? `${mode} · ${axis} selection ${slicePositions[axis].toFixed(1)} mm · layer ${scientificLayer.bounds_mm[0].toFixed(1)}–${scientificLayer.bounds_mm[1].toFixed(1)} mm`
-         : `${mode} · ${axis} · ${slicePositions[axis].toFixed(1)} mm · ${log ? "Log" : "Linear"}`
+         ? `${mode} · ${axis} selection ${slicePositions[axis].toFixed(1)} mm · layer ${scientificLayer.bounds_mm[0].toFixed(1)}–${scientificLayer.bounds_mm[1].toFixed(1)} mm · ${scaleLabel}`
+         : `${mode} · ${axis} · ${slicePositions[axis].toFixed(1)} mm · ${scaleLabel}`
     : `Scalar design PZ ${pz.toFixed(2)} cm · CZ ${cz.toFixed(2)} cm · CAD fixed`;
 
   const runCameraCommand = (action: "reset" | "fit") => {
@@ -140,7 +144,7 @@ export function BlanketViewport() {
           <h2>Blanket Unit Cell <small>/ GLB derived from STEP</small></h2>
         </div>
         <div className="viewport-state" data-testid="viewport-state">
-          <span><i className={geometryState === "error" ? "is-error" : ""} /> {neutronics ? field.displayName : "Web CAD Geometry"}</span>
+          <span><i className={geometryState === "error" ? "is-error" : ""} /> {neutronics ? fieldDisplayName : "Web CAD Geometry"}</span>
           <Badge tone={geometryState === "ready" ? "green" : geometryState === "error" ? "amber" : "muted"}>
             {geometryState === "ready" ? "Geometry ready" : geometryState === "error" ? "Asset unavailable" : "Loading geometry"}
           </Badge>
@@ -181,7 +185,7 @@ export function BlanketViewport() {
           <div className="scientific-load-state" role="status" data-testid="scientific-loading">
             <span className="geometry-spinner" />
             <strong>{scientificStatus === "loading-scalars" ? "Loading scalar array" : scientificStatus === "loading-geometry" ? "Validating scientific geometry" : "Loading scientific metadata"}</strong>
-            <small>Reference MCNP simulation · Total Nuclear Heating</small>
+            <small>Reference MCNP simulation · {fieldDisplayName}</small>
           </div>
         )}
         {neutronics && scientificStatus === "error" && (
@@ -192,18 +196,19 @@ export function BlanketViewport() {
             <span>CAD and scalar Twin API remain independent.</span>
           </div>
         )}
-        {neutronics && scientificStatus === "ready" && mode === "Slice" && scientificField && (
+        {neutronics && scientificStatus === "ready" && mode === "Slice" && scientificField && activeRecord && scalarTicks && (
           <div className="scientific-scalar-bar" data-testid="scientific-scalar-bar">
-            <div className="scalar-bar-heading"><strong>Total Nuclear Heating</strong><span>W/cm³</span></div>
+            <div className="scalar-bar-heading"><strong>{activeRecord.display_name}</strong><span>{activeRecord.display_units} · {scaleLabel}</span></div>
             <div className="scalar-bar-body">
               <div className="scalar-gradient" style={{ background: SCIENTIFIC_COLOR_GRADIENT }} />
               <div className="scalar-ticks">
-                <span>{scientificField.manifest.field.web_range[1].toFixed(3)}</span>
-                <span>{((scientificField.manifest.field.web_range[0] + scientificField.manifest.field.web_range[1]) / 2).toFixed(3)}</span>
-                <span>{scientificField.manifest.field.web_range[0].toFixed(3)}</span>
+                <span>{scalarTicks[0].toExponential(2)}</span>
+                <span>{scalarTicks[1].toExponential(2)}</span>
+                <span>{log ? `>=${scalarTicks[2].toExponential(1)}` : scalarTicks[2].toExponential(2)}</span>
               </div>
             </div>
-            <small>{scientificLayer ? `Z layer ${scientificLayer.bounds_mm[0].toFixed(1)}–${scientificLayer.bounds_mm[1].toFixed(1)} mm · center ${scientificLayer.center_mm.toFixed(1)} mm` : "Linear · raw cell values"}</small>
+            <small>{scientificLayer ? `${axis} layer ${scientificLayer.bounds_mm[0].toFixed(1)}–${scientificLayer.bounds_mm[1].toFixed(1)} mm · center ${scientificLayer.center_mm.toFixed(1)} mm` : `${scaleLabel} · raw cell values`}</small>
+            {log && <small>Zero cells use below-range color</small>}
           </div>
         )}
       </div>
@@ -213,7 +218,7 @@ export function BlanketViewport() {
         <span>SOURCE<strong>GLB derived from STEP</strong></span>
         <span>DISPLAYED CAD<strong>Fixed representative geometry</strong></span>
         <span>3D SCIENTIFIC FIELD<strong className={scientificStatus === "ready" ? "" : "is-unavailable"}>{scientificStatus === "ready" ? "Loaded MCNP Simulation" : scientificStatus === "error" ? "Asset unavailable" : "Loading"}</strong></span>
-        <span>FIELD<strong>{scientificStatus === "ready" ? "Total Nuclear Heating" : "—"}</strong></span>
+        <span>FIELD<strong>{scientificStatus === "ready" ? fieldDisplayName : "—"}</strong></span>
         <span>SOURCE REPRESENTATION<strong>{scientificStatus === "ready" ? "Derived rectilinear cell grid · Float32" : "—"}</strong></span>
       </div>
 
@@ -235,9 +240,16 @@ export function BlanketViewport() {
           className="geometry-diagnostics"
           data-testid="scientific-field-ready"
           data-cell-count={scientificField.manifest.mesh.cell_count}
+          data-active-field={fieldId}
+          data-slice-axis={axis}
+          data-scale-mode={log ? "log" : "linear"}
+          data-position-mm={slicePositions[axis].toFixed(1)}
           data-z-mm={slicePositions.Z.toFixed(1)}
-          data-z-layer={scientificLayerIndex}
-          data-z-layer-bounds={scientificLayer ? scientificLayer.bounds_mm.join(",") : "unknown"}
+          data-layer={scientificLayerIndex}
+          data-z-layer={axis === "Z" ? scientificLayerIndex : "inactive"}
+          data-layer-bounds={scientificLayer ? scientificLayer.bounds_mm.join(",") : "unknown"}
+          data-z-layer-bounds={axis === "Z" && scientificLayer ? scientificLayer.bounds_mm.join(",") : "inactive"}
+          data-rendered-mm={scientificLayer?.center_mm.toFixed(1) ?? "unknown"}
           data-rendered-z-mm={scientificLayer?.center_mm.toFixed(1) ?? "unknown"}
           data-visible={neutronics && mode === "Slice"}
           data-load-ms={scientificMetrics?.totalMs?.toFixed(1) ?? "unknown"}
@@ -247,6 +259,9 @@ export function BlanketViewport() {
           data-scalar-parse-ms={scientificMetrics?.scalarParseMs?.toFixed(1) ?? "unknown"}
           data-render-ms={scientificMetrics?.firstRenderMs?.toFixed(1) ?? "unknown"}
           data-slice-update-ms={scientificMetrics?.sliceUpdateMs?.toFixed(1) ?? "unknown"}
+          data-field-switch-ms={scientificMetrics?.fieldSwitchMs?.toFixed(1) ?? "unknown"}
+          data-probe-ms={scientificMetrics?.probeMs?.toFixed(1) ?? "unknown"}
+          data-scalar-domain={activeRecord ? scalarDomain(activeRecord, log ? "log" : "linear").join(",") : "unknown"}
         />
       )}
       <div className="viewport-footer">

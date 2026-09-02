@@ -11,6 +11,12 @@ export type FieldSource = "Not connected" | "Loaded MCNP Simulation";
 export type VisualizationMode = "Off" | "Slice" | "Iso-surface";
 export type SliceAxis = "X" | "Y" | "Z";
 export type ComponentId = "armor" | "breeder" | "multiplier" | "structure" | "coolant";
+export type ScientificFieldId =
+  | "neutron_flux"
+  | "photon_flux"
+  | "neutron_heating"
+  | "photon_heating"
+  | "nuclear_heating";
 
 export interface DesignParameter {
   id: "pz_206" | "cz_301_radius";
@@ -79,7 +85,7 @@ export interface ScalarPredictionResponse {
 }
 
 export interface FieldMetadata {
-  id: string;
+  id: ScientificFieldId;
   displayName: string;
   category: "Flux" | "Heating";
   units: string;
@@ -106,7 +112,7 @@ export interface ComponentState {
 export interface TwinState {
   design: DesignState;
   fields: FieldMetadata[];
-  activeFieldId: string;
+  activeFieldId: ScientificFieldId;
   provenance: TwinProvenance;
   components: ComponentState[];
   coolant: { medium: string; pressureMpa: number; inletC: number; outletC: number };

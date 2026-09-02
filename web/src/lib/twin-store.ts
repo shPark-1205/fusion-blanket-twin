@@ -2,10 +2,18 @@ import { create } from "zustand";
 import { mockTwinState } from "./mock-twin-state";
 import { twinApi, TwinApiError } from "./twin-api";
 import {
-  loadScientificField,
+  buildVoxelProbe,
+  loadAllScientificFieldValues,
+  loadScientificFieldValues,
+  loadScientificManifest,
+  selectedLayer,
+  voxelFromPoint,
   type ScientificFieldData,
+  type ScientificFieldId,
   type ScientificFieldStatus,
   type ScientificLoadMetrics,
+  type ScientificProbeStatus,
+  type ScientificVoxelProbe,
 } from "./scientific-field";
 import type {
   ComponentId,
@@ -38,7 +46,10 @@ interface TwinUiState {
   scientificField: ScientificFieldData | null;
   scientificFieldError: string | null;
   scientificLoadMetrics: ScientificLoadMetrics | null;
-  activeFieldId: string;
+  scientificProbe: ScientificVoxelProbe | null;
+  scientificProbeStatus: ScientificProbeStatus;
+  scientificProbeError: string | null;
+  activeFieldId: ScientificFieldId;
   visualizationMode: VisualizationMode;
   sliceAxis: SliceAxis;
   useLogScale: boolean;
@@ -55,11 +66,13 @@ interface TwinUiState {
   setCz301: (value: number) => void;
   applyDesign: () => Promise<void>;
   resetDesign: () => void;
-  setActiveField: (id: string) => void;
+  setActiveField: (id: ScientificFieldId) => void;
   setVisualizationMode: (mode: VisualizationMode) => void;
   setSliceAxis: (axis: SliceAxis) => void;
   setUseLogScale: (enabled: boolean) => void;
   setSlicePosition: (axis: SliceAxis, value: number) => void;
+  probeScientificVoxel: (pointMm: [number, number, number]) => Promise<void>;
+  clearScientificProbe: () => void;
   selectComponent: (id: ComponentId) => void;
   toggleComponent: (id: ComponentId) => void;
   setComponentOpacity: (id: ComponentId, opacity: number) => void;
@@ -85,6 +98,9 @@ export const useTwinStore = create<TwinUiState>((set, get) => ({
   scientificField: null,
   scientificFieldError: null,
   scientificLoadMetrics: null,
+  scientificProbe: null,
+  scientificProbeStatus: "idle",
+  scientificProbeError: null,
   activeFieldId: mockTwinState.activeFieldId,
   visualizationMode: "Slice",
   sliceAxis: "Z",
@@ -141,11 +157,76 @@ export const useTwinStore = create<TwinUiState>((set, get) => ({
     pz206: mockTwinState.design.parameters.pz_206.value,
     cz301: mockTwinState.design.parameters.cz_301_radius.value,
   }),
-  setActiveField: (activeFieldId) => set({ activeFieldId }),
-  setVisualizationMode: (visualizationMode) => set({ visualizationMode }),
-  setSliceAxis: (sliceAxis) => set({ sliceAxis }),
+  setActiveField: (activeFieldId) => {
+    set({ activeFieldId });
+    void loadActiveScientificField(activeFieldId as ScientificFieldId, false);
+  },
+  setVisualizationMode: (visualizationMode) => set({
+    visualizationMode,
+    scientificProbe: visualizationMode === "Off" ? null : get().scientificProbe,
+    scientificProbeStatus: visualizationMode === "Off" ? "idle" : get().scientificProbeStatus,
+  }),
+  setSliceAxis: (sliceAxis) => set((state) => ({
+    sliceAxis,
+    scientificProbe: null,
+    scientificProbeStatus: "idle",
+    slicePositions: state.scientificField
+      ? {
+          ...state.slicePositions,
+          [sliceAxis]: selectedLayer(
+            state.scientificField.manifest,
+            sliceAxis,
+            state.slicePositions[sliceAxis],
+          ).center_mm,
+        }
+      : state.slicePositions,
+  })),
   setUseLogScale: (useLogScale) => set({ useLogScale }),
-  setSlicePosition: (axis, value) => set((state) => ({ slicePositions: { ...state.slicePositions, [axis]: value } })),
+  setSlicePosition: (axis, value) => set((state) => ({
+    slicePositions: { ...state.slicePositions, [axis]: value },
+    scientificProbe: null,
+    scientificProbeStatus: "idle",
+  })),
+  probeScientificVoxel: async (pointMm) => {
+    const state = get();
+    if (!state.scientificField || state.visualizationMode !== "Slice" || state.scientificFieldStatus === "error") return;
+    const indices = voxelFromPoint(
+      state.scientificField.manifest,
+      state.sliceAxis,
+      state.slicePositions[state.sliceAxis],
+      pointMm,
+    );
+    if (!indices) {
+      set({ scientificProbe: null, scientificProbeStatus: "error", scientificProbeError: "Clicked point is outside the MCNP FMESH." });
+      return;
+    }
+    const started = performance.now();
+    set({ scientificProbeStatus: "loading", scientificProbeError: null });
+    try {
+      const { valuesByField, metrics } = await loadAllScientificFieldValues(
+        state.scientificField.manifest,
+        state.scientificField.valuesByField,
+      );
+      const probe = buildVoxelProbe(state.scientificField.manifest, valuesByField, indices);
+      set((latest) => ({
+        scientificField: latest.scientificField ? { ...latest.scientificField, valuesByField } : latest.scientificField,
+        scientificProbe: probe,
+        scientificProbeStatus: "ready",
+        scientificProbeError: null,
+        scientificLoadMetrics: latest.scientificLoadMetrics
+          ? {
+              ...latest.scientificLoadMetrics,
+              scalarDownloadMs: (latest.scientificLoadMetrics.scalarDownloadMs ?? 0) + metrics.downloadMs,
+              scalarParseMs: (latest.scientificLoadMetrics.scalarParseMs ?? 0) + metrics.parseMs,
+              probeMs: performance.now() - started,
+            }
+          : null,
+      }));
+    } catch (error) {
+      set({ scientificProbeStatus: "error", scientificProbeError: errorMessage(error) });
+    }
+  },
+  clearScientificProbe: () => set({ scientificProbe: null, scientificProbeStatus: "idle", scientificProbeError: null }),
   selectComponent: (selectedComponentId) => set({ selectedComponentId }),
   toggleComponent: (id) => set((state) => ({
     componentVisibility: { ...state.componentVisibility, [id]: !state.componentVisibility[id] },
@@ -159,23 +240,67 @@ export const useTwinStore = create<TwinUiState>((set, get) => ({
 async function initializeScientificState(): Promise<void> {
   useTwinStore.setState({ scientificFieldStatus: "loading-metadata", scientificFieldError: null });
   try {
-    const { data, metrics } = await loadScientificField((scientificFieldStatus) => {
+    const { manifest, metrics } = await loadScientificManifest((scientificFieldStatus) => {
       useTwinStore.setState({ scientificFieldStatus });
     });
+    const data: ScientificFieldData = { manifest, valuesByField: {} };
     useTwinStore.setState((state) => ({
       scientificField: data,
-      scientificFieldStatus: "ready",
+      scientificFieldStatus: "loading-scalars",
       scientificFieldError: null,
       scientificLoadMetrics: metrics,
       slicePositions: {
         ...state.slicePositions,
-        Z: data.manifest.slicing.default_position_mm,
+        X: manifest.slicing.axes.X.default_position_mm,
+        Y: manifest.slicing.axes.Y.default_position_mm,
+        Z: manifest.slicing.axes.Z.default_position_mm,
       },
     }));
+    await loadActiveScientificField(manifest.default_field_key, true);
   } catch (error) {
     useTwinStore.setState({
       scientificFieldStatus: "error",
       scientificFieldError: error instanceof Error ? error.message : "Scientific field could not be loaded.",
+    });
+  }
+}
+
+async function loadActiveScientificField(activeFieldId: ScientificFieldId, initialLoad: boolean): Promise<void> {
+  const state = useTwinStore.getState();
+  if (!state.scientificField) return;
+  if (state.scientificField.valuesByField[activeFieldId]) {
+    useTwinStore.setState({ scientificFieldStatus: "ready", scientificFieldError: null });
+    return;
+  }
+  const started = performance.now();
+  useTwinStore.setState({ scientificFieldStatus: "loading-scalars", scientificFieldError: null });
+  try {
+    const result = await loadScientificFieldValues(state.scientificField.manifest, activeFieldId, (scientificFieldStatus) => {
+      useTwinStore.setState({ scientificFieldStatus });
+    });
+    useTwinStore.setState((latest) => ({
+      scientificField: latest.scientificField
+        ? {
+            ...latest.scientificField,
+            valuesByField: { ...latest.scientificField.valuesByField, [activeFieldId]: result.values },
+          }
+        : latest.scientificField,
+      scientificFieldStatus: "ready",
+      scientificFieldError: null,
+      scientificLoadMetrics: latest.scientificLoadMetrics
+        ? {
+            ...latest.scientificLoadMetrics,
+            scalarDownloadMs: initialLoad ? result.metrics.downloadMs : latest.scientificLoadMetrics.scalarDownloadMs,
+            scalarParseMs: initialLoad ? result.metrics.parseMs : latest.scientificLoadMetrics.scalarParseMs,
+            totalMs: initialLoad ? (latest.scientificLoadMetrics.totalMs ?? 0) + result.metrics.downloadMs + result.metrics.parseMs : latest.scientificLoadMetrics.totalMs,
+            fieldSwitchMs: initialLoad ? latest.scientificLoadMetrics.fieldSwitchMs : performance.now() - started,
+          }
+        : null,
+    }));
+  } catch (error) {
+    useTwinStore.setState({
+      scientificFieldStatus: "error",
+      scientificFieldError: errorMessage(error),
     });
   }
 }

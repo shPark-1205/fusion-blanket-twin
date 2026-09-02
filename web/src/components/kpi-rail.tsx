@@ -58,7 +58,9 @@ export function KpiRail() {
   const predictionStatus = useTwinStore((state) => state.predictionStatus);
   const predictionError = useTwinStore((state) => state.predictionError);
   const scientificStatus = useTwinStore((state) => state.scientificFieldStatus);
-  const activeField = mockTwinState.fields.find((field) => field.id === activeFieldId)!;
+  const scientificField = useTwinStore((state) => state.scientificField);
+  const activeField = scientificField?.manifest.fields[activeFieldId] ?? mockTwinState.fields.find((field) => field.id === activeFieldId)!;
+  const activeFieldName = "display_name" in activeField ? activeField.display_name : activeField.displayName;
   const selectedComponent = mockTwinState.components.find((component) => component.id === selectedComponentId)!;
   const scalarSource = prediction?.metadata.source === "simulation" ? "Simulation" : "Surrogate Prediction";
   const scalarBadge = predictionStatus === "pending" ? "Updating" : prediction ? scalarSource : "Unavailable";
@@ -87,7 +89,7 @@ export function KpiRail() {
         </div>
         <div className="compact-pairs">
           <span>Component state<strong>{componentVisibility[selectedComponentId] ? "Shown" : "Hidden"}</strong></span>
-          <span>Active display<strong>{section === "neutronics" ? activeField.displayName : "Web CAD"}</strong></span>
+          <span>Active display<strong>{section === "neutronics" ? activeFieldName : "Web CAD"}</strong></span>
         </div>
         <label className="opacity-control">
           <span>Presentation opacity <output data-testid="component-opacity-value">{Math.round(componentOpacity[selectedComponentId] * 100)}%</output></span>
@@ -111,7 +113,7 @@ export function KpiRail() {
         <ProvenanceRow label="Domain state" value={prediction?.metadata.domain_status ?? "Unavailable"} unavailable={!prediction} />
         <ProvenanceRow label="Nearest simulation" value={prediction?.metadata.nearest_case ?? "Unavailable"} unavailable={!prediction} />
         <ProvenanceRow label="3D scientific field" value={scientificStatus === "ready" ? "Loaded MCNP Simulation" : scientificStatus === "error" ? "Asset unavailable" : "Loading"} unavailable={scientificStatus !== "ready"} />
-        <ProvenanceRow label="Field" value={scientificStatus === "ready" ? "Total Nuclear Heating" : "Unavailable"} unavailable={scientificStatus !== "ready"} />
+        <ProvenanceRow label="Field" value={scientificStatus === "ready" ? activeFieldName : "Unavailable"} unavailable={scientificStatus !== "ready"} />
         <ProvenanceRow label="Thermal / CFX" value="Unavailable" unavailable />
         <ProvenanceRow label="Experiment" value="Future / unavailable" unavailable />
       </div>

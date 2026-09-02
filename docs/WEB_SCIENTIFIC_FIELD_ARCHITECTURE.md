@@ -22,7 +22,7 @@ The authoritative VTKHDF file is 53,426,406 bytes on disk. Its uncompressed arra
 | One web scalar copy | 1,172,380 Float32 | 4,689,520 |
 | All five source scalars | Float64 | 46,895,200 |
 
-A full unstructured browser copy would start above 109 MB for topology plus one scalar, before JavaScript parsing copies, render buffers, and framework overhead. The selected prototype keeps a 4.69 MB scalar array, small axis/metadata JSON, and only one 146 × 146 layer of render geometry resident. A practical scientific-layer estimate is roughly 8–12 MB rather than more than 120 MB for the full unstructured route.
+A full unstructured browser copy would start above 109 MB for topology plus one scalar, before JavaScript parsing copies, render buffers, and framework overhead. The current web representation keeps one common axis/grid manifest, one 4.69 MB Float32 payload per canonical field, and only the active 2D layer of render geometry resident. Loading all five fields for probing costs about 23.45 MB of scalar arrays before JavaScript overhead, still far below duplicating full unstructured topology.
 
 ## Candidate comparison
 
@@ -37,9 +37,13 @@ A full unstructured browser copy would start above 109 MB for topology plus one 
 
 Use D for this verified reference grid. A reproducible Python exporter validates every VTK cell as an adjacent axis-aligned voxel, maps it to exact nonuniform axis boundaries, and writes a manifest plus a little-endian Float32 visualization array. The authoritative Float64 VTKHDF is unchanged and ignored. Generated assets are also ignored and regenerated locally.
 
-The browser draws a Z-normal layer in the existing React Three Fiber scene. CAD and field therefore share one renderer, camera, controls, viewport, depth buffer, and resize lifecycle; there is no camera synchronization protocol to drift. Each displayed rectangle uses its containing voxel's raw cell value with flat color. There is no point-data conversion or scientific interpolation.
+The browser draws an X-, Y-, or Z-normal layer in the existing React Three Fiber scene. CAD and field therefore share one renderer, camera, controls, viewport, depth buffer, and resize lifecycle; there is no camera synchronization protocol to drift. Each displayed rectangle uses its containing voxel's raw cell value with flat color. There is no point-data conversion or scientific interpolation.
 
-The prototype is deliberately limited to Total Nuclear Heating. Arbitrary unstructured future meshes should use a server-side extraction path (C) or a purpose-built unstructured web pipeline rather than being coerced into this representation.
+The second web-field milestone extends the same representation to the five canonical MCNP fields that share this FMESH grid: Neutron Flux, Photon Flux, Neutron Heating, Photon Heating, and Total Nuclear Heating. The manifest stores the grid once and records per-field payload metadata, ranges, precision deviations, positive minima for log display, slice ranges, and provenance. Scalar arrays are loaded lazily and cached in memory; the raw voxel probe loads any missing field arrays once, then reports all five values for the selected voxel.
+
+Raw voxel probing is a boundary-search operation on the rectilinear axes. The convention is half-open intervals `[lower, upper)`, with the final upper boundary included in the final cell. For a visible slice, the selected axis index comes from the snapped slice layer and the other two indices come from the clicked position. This preserves MCNP cell-data semantics and avoids per-click ray testing against the full voxel volume.
+
+Arbitrary unstructured future meshes should use a server-side extraction path (C) or a purpose-built unstructured web pipeline rather than being coerced into this representation.
 
 ## Data and precision policy
 
@@ -49,4 +53,4 @@ The prototype is deliberately limited to Total Nuclear Heating. Arbitrary unstru
 cmd.exe /c "set PYTHONPATH=src&& .venv\Scripts\python.exe scripts\export_web_scientific_field.py"
 ```
 
-This creates ignored files under `web/public/scientific/generated/`. Float32 is explicitly a visualization copy. The manifest records source and web ranges plus maximum, relative, and mean conversion deviations so precision loss cannot be silent.
+This creates ignored files under `web/public/scientific/generated/`. Float32 is explicitly a visualization copy. The manifest records source and web ranges plus maximum, relative, and mean conversion deviations so precision loss cannot be silent. Log display is visualization-only; raw exported values are not transformed, and zero cells use a below-positive-range color.

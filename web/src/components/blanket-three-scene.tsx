@@ -14,8 +14,15 @@ import {
 } from "@/lib/blanket-geometry";
 import type { CameraCommand } from "@/lib/twin-store";
 import { useTwinStore } from "@/lib/twin-store";
-import type { ComponentId } from "@/lib/twin-types";
-import { scientificColor, zCellIndex } from "@/lib/scientific-field";
+import type { ComponentId, ScientificFieldId, SliceAxis } from "@/lib/twin-types";
+import {
+  axisBoundaries,
+  colorScalarValue,
+  linearCellIndex,
+  selectedLayer,
+  type ScientificFieldManifest,
+  type ScientificVoxelProbe,
+} from "@/lib/scientific-field";
 
 export interface GeometryReadyMetrics {
   totalMs: number;
@@ -56,42 +63,33 @@ function countTriangles(geometry: THREE.BufferGeometry) {
 function ScientificSlice() {
   const section = useTwinStore((state) => state.section);
   const mode = useTwinStore((state) => state.visualizationMode);
-  const positionMm = useTwinStore((state) => state.slicePositions.Z);
-  const field = useTwinStore((state) => state.scientificField);
+  const axis = useTwinStore((state) => state.sliceAxis);
+  const positionsMm = useTwinStore((state) => state.slicePositions);
+  const activeFieldId = useTwinStore((state) => state.activeFieldId) as ScientificFieldId;
+  const scientificData = useTwinStore((state) => state.scientificField);
+  const useLogScale = useTwinStore((state) => state.useLogScale);
+  const probe = useTwinStore((state) => state.scientificProbe);
+  const probeVoxel = useTwinStore((state) => state.probeScientificVoxel);
   const reportRender = useTwinStore((state) => state.reportScientificRender);
   const { invalidate } = useThree();
   const slice = useMemo(() => {
-    if (!field || section !== "neutronics" || mode !== "Slice") return null;
-    const { x, y, z } = field.manifest.mesh.axis_boundaries_mm;
-    const [, ny, nx] = field.manifest.mesh.cell_shape_zyx;
-    const layer = zCellIndex(z, positionMm);
-    const layerCenterMm = (z[layer] + z[layer + 1]) / 2;
-    const verticesPerCell = 6;
-    const positions = new Float32Array(nx * ny * verticesPerCell * 3);
-    const colors = new Float32Array(positions.length);
-    const range = field.manifest.field.web_range;
-    let offset = 0;
-    for (let iy = 0; iy < ny; iy += 1) {
-      for (let ix = 0; ix < nx; ix += 1) {
-        const value = field.values[layer * ny * nx + iy * nx + ix];
-        const color = scientificColor(value, range);
-        const corners = [
-          [x[ix], y[iy]], [x[ix + 1], y[iy]], [x[ix + 1], y[iy + 1]],
-          [x[ix], y[iy]], [x[ix + 1], y[iy + 1]], [x[ix], y[iy + 1]],
-        ];
-        for (const [px, py] of corners) {
-          positions[offset] = px;
-          positions[offset + 1] = py;
-          positions[offset + 2] = layerCenterMm;
-          colors[offset] = color[0];
-          colors[offset + 1] = color[1];
-          colors[offset + 2] = color[2];
-          offset += 3;
-        }
-      }
-    }
-    return { positions, colors, layer, layerCenterMm };
-  }, [field, mode, positionMm, section]);
+    if (!scientificData || section !== "neutronics" || mode !== "Slice") return null;
+    const values = scientificData.valuesByField[activeFieldId];
+    if (!values) return null;
+    const field = scientificData.manifest.fields[activeFieldId];
+    return buildSliceGeometry(scientificData.manifest, values, field.key, axis, positionsMm[axis], useLogScale ? "log" : "linear", probe);
+  }, [activeFieldId, axis, mode, positionsMm, probe, scientificData, section, useLogScale]);
+
+  const handleClick = (event: ThreeEvent<MouseEvent>) => {
+    event.stopPropagation();
+    const scale = BLANKET_GEOMETRY_ADAPTER.sourceToSceneScale;
+    const pointMm: [number, number, number] = [
+      event.point.x / scale,
+      event.point.y / scale,
+      event.point.z / scale,
+    ];
+    void probeVoxel(pointMm);
+  };
 
   useEffect(() => {
     if (!slice) return;
@@ -107,25 +105,232 @@ function ScientificSlice() {
 
   if (!slice) return null;
   return (
-    <mesh
-      scale={BLANKET_GEOMETRY_ADAPTER.sourceToSceneScale}
-      renderOrder={8}
-      userData={{ scientificField: "nuclear_heating", zLayer: slice.layer, zCenterMm: slice.layerCenterMm }}
-    >
-      <bufferGeometry>
-        <bufferAttribute attach="attributes-position" args={[slice.positions, 3]} />
-        <bufferAttribute attach="attributes-color" args={[slice.colors, 3]} />
-      </bufferGeometry>
-      <meshBasicMaterial
-        vertexColors
-        side={THREE.DoubleSide}
-        transparent
-        opacity={0.9}
-        depthWrite={false}
-        toneMapped={false}
-      />
-    </mesh>
+    <>
+      <mesh
+        scale={BLANKET_GEOMETRY_ADAPTER.sourceToSceneScale}
+        renderOrder={8}
+        onClick={handleClick}
+        userData={{ scientificField: activeFieldId, sliceAxis: axis, layer: slice.layer.index, centerMm: slice.layer.center_mm }}
+      >
+        <bufferGeometry>
+          <bufferAttribute attach="attributes-position" args={[slice.positions, 3]} />
+          <bufferAttribute attach="attributes-color" args={[slice.colors, 3]} />
+        </bufferGeometry>
+        <meshBasicMaterial
+          vertexColors
+          side={THREE.DoubleSide}
+          transparent
+          opacity={0.9}
+          depthWrite={false}
+          toneMapped={false}
+        />
+      </mesh>
+      {slice.highlightPositions && (
+        <lineSegments scale={BLANKET_GEOMETRY_ADAPTER.sourceToSceneScale} renderOrder={10}>
+          <bufferGeometry>
+            <bufferAttribute attach="attributes-position" args={[slice.highlightPositions, 3]} />
+          </bufferGeometry>
+          <lineBasicMaterial color="#e5edf1" transparent opacity={0.92} depthTest={false} toneMapped={false} />
+        </lineSegments>
+      )}
+      <mesh
+        scale={BLANKET_GEOMETRY_ADAPTER.sourceToSceneScale}
+        renderOrder={9}
+        onClick={handleClick}
+        userData={{ scientificPickPlane: true, sliceAxis: axis, layer: slice.layer.index }}
+      >
+        <bufferGeometry>
+          <bufferAttribute attach="attributes-position" args={[slice.pickPositions, 3]} />
+        </bufferGeometry>
+        <meshBasicMaterial side={THREE.DoubleSide} transparent opacity={0} depthWrite={false} />
+      </mesh>
+    </>
   );
+}
+
+function ScientificProbeController() {
+  const section = useTwinStore((state) => state.section);
+  const mode = useTwinStore((state) => state.visualizationMode);
+  const axis = useTwinStore((state) => state.sliceAxis);
+  const positionsMm = useTwinStore((state) => state.slicePositions);
+  const scientificData = useTwinStore((state) => state.scientificField);
+  const probeVoxel = useTwinStore((state) => state.probeScientificVoxel);
+  const { camera, gl } = useThree();
+
+  useEffect(() => {
+    if (!scientificData || section !== "neutronics" || mode !== "Slice") return;
+    const raycaster = new THREE.Raycaster();
+    const pointer = new THREE.Vector2();
+    const intersection = new THREE.Vector3();
+    const normal = axis === "X"
+      ? new THREE.Vector3(1, 0, 0)
+      : axis === "Y"
+        ? new THREE.Vector3(0, 1, 0)
+        : new THREE.Vector3(0, 0, 1);
+    const layer = selectedLayer(scientificData.manifest, axis, positionsMm[axis]);
+    const fixedScene = layer.center_mm * BLANKET_GEOMETRY_ADAPTER.sourceToSceneScale;
+    const plane = new THREE.Plane(normal, -fixedScene);
+
+    const handleClick = (event: MouseEvent) => {
+      if (event.button !== 0) return;
+      const rect = gl.domElement.getBoundingClientRect();
+      pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+      pointer.y = -(((event.clientY - rect.top) / rect.height) * 2 - 1);
+      raycaster.setFromCamera(pointer, camera);
+      const point = raycaster.ray.intersectPlane(plane, intersection);
+      if (!point) return;
+      const scale = BLANKET_GEOMETRY_ADAPTER.sourceToSceneScale;
+      const pointMm: [number, number, number] = [point.x / scale, point.y / scale, point.z / scale];
+      pointMm[axis === "X" ? 0 : axis === "Y" ? 1 : 2] = layer.center_mm;
+      void probeVoxel(pointMm);
+    };
+
+    gl.domElement.addEventListener("click", handleClick, true);
+    return () => gl.domElement.removeEventListener("click", handleClick, true);
+  }, [axis, camera, gl.domElement, mode, positionsMm, probeVoxel, scientificData, section]);
+
+  return null;
+}
+
+function buildSliceGeometry(
+  manifest: ScientificFieldManifest,
+  values: Float32Array,
+  fieldId: ScientificFieldId,
+  axis: SliceAxis,
+  positionMm: number,
+  scaleMode: "linear" | "log",
+  probe: ScientificVoxelProbe | null,
+) {
+  const x = axisBoundaries(manifest, "X");
+  const y = axisBoundaries(manifest, "Y");
+  const z = axisBoundaries(manifest, "Z");
+  const [, ny, nx] = manifest.mesh.cell_shape_zyx;
+  const layer = selectedLayer(manifest, axis, positionMm);
+  const field = manifest.fields[fieldId];
+  const cellCount = axis === "X" ? ny * manifest.mesh.cell_shape_zyx[0] : axis === "Y" ? nx * manifest.mesh.cell_shape_zyx[0] : nx * ny;
+  const verticesPerCell = 6;
+  const positions = new Float32Array(cellCount * verticesPerCell * 3);
+  const colors = new Float32Array(positions.length);
+  let offset = 0;
+
+  const addVertex = (px: number, py: number, pz: number, color: [number, number, number]) => {
+    positions[offset] = px;
+    positions[offset + 1] = py;
+    positions[offset + 2] = pz;
+    colors[offset] = color[0];
+    colors[offset + 1] = color[1];
+    colors[offset + 2] = color[2];
+    offset += 3;
+  };
+
+  const addQuad = (corners: Array<[number, number, number]>, index: { i: number; j: number; k: number }) => {
+    const value = values[linearCellIndex(manifest, index)];
+    const color = colorScalarValue(value, field, scaleMode);
+    for (const cornerIndex of [0, 1, 2, 0, 2, 3]) {
+      const [px, py, pz] = corners[cornerIndex];
+      addVertex(px, py, pz, color);
+    }
+  };
+
+  if (axis === "X") {
+    const i = layer.index;
+    const fixed = layer.center_mm;
+    for (let k = 0; k < z.length - 1; k += 1) {
+      for (let j = 0; j < y.length - 1; j += 1) {
+        addQuad([
+          [fixed, y[j], z[k]],
+          [fixed, y[j + 1], z[k]],
+          [fixed, y[j + 1], z[k + 1]],
+          [fixed, y[j], z[k + 1]],
+        ], { i, j, k });
+      }
+    }
+  } else if (axis === "Y") {
+    const j = layer.index;
+    const fixed = layer.center_mm;
+    for (let k = 0; k < z.length - 1; k += 1) {
+      for (let i = 0; i < x.length - 1; i += 1) {
+        addQuad([
+          [x[i], fixed, z[k]],
+          [x[i + 1], fixed, z[k]],
+          [x[i + 1], fixed, z[k + 1]],
+          [x[i], fixed, z[k + 1]],
+        ], { i, j, k });
+      }
+    }
+  } else {
+    const k = layer.index;
+    const fixed = layer.center_mm;
+    for (let j = 0; j < y.length - 1; j += 1) {
+      for (let i = 0; i < x.length - 1; i += 1) {
+        addQuad([
+          [x[i], y[j], fixed],
+          [x[i + 1], y[j], fixed],
+          [x[i + 1], y[j + 1], fixed],
+          [x[i], y[j + 1], fixed],
+        ], { i, j, k });
+      }
+    }
+  }
+
+  return {
+    positions,
+    colors,
+    layer,
+    pickPositions: buildSlicePickPlane(axis, manifest, layer.center_mm),
+    highlightPositions: probe && probe.indices[axis.toLowerCase() === "x" ? "i" : axis.toLowerCase() === "y" ? "j" : "k"] === layer.index
+      ? buildProbeHighlight(axis, probe)
+      : null,
+  };
+}
+
+function buildSlicePickPlane(axis: SliceAxis, manifest: ScientificFieldManifest, centerMm: number) {
+  const x = axisBoundaries(manifest, "X");
+  const y = axisBoundaries(manifest, "Y");
+  const z = axisBoundaries(manifest, "Z");
+  const x0 = x[0];
+  const x1 = x[x.length - 1];
+  const y0 = y[0];
+  const y1 = y[y.length - 1];
+  const z0 = z[0];
+  const z1 = z[z.length - 1];
+  const corners: Array<[number, number, number]> = axis === "X"
+    ? [[centerMm, y0, z0], [centerMm, y1, z0], [centerMm, y1, z1], [centerMm, y0, z1]]
+    : axis === "Y"
+      ? [[x0, centerMm, z0], [x1, centerMm, z0], [x1, centerMm, z1], [x0, centerMm, z1]]
+      : [[x0, y0, centerMm], [x1, y0, centerMm], [x1, y1, centerMm], [x0, y1, centerMm]];
+  const positions = new Float32Array(18);
+  let offset = 0;
+  for (const cornerIndex of [0, 1, 2, 0, 2, 3]) {
+    const [px, py, pz] = corners[cornerIndex];
+    positions[offset] = px;
+    positions[offset + 1] = py;
+    positions[offset + 2] = pz;
+    offset += 3;
+  }
+  return positions;
+}
+
+function buildProbeHighlight(axis: SliceAxis, probe: ScientificVoxelProbe) {
+  const { x, y, z } = probe.boundsMm;
+  const center = probe.centerMm;
+  const corners: Array<[number, number, number]> = axis === "X"
+    ? [[center[0], y[0], z[0]], [center[0], y[1], z[0]], [center[0], y[1], z[1]], [center[0], y[0], z[1]]]
+    : axis === "Y"
+      ? [[x[0], center[1], z[0]], [x[1], center[1], z[0]], [x[1], center[1], z[1]], [x[0], center[1], z[1]]]
+      : [[x[0], y[0], center[2]], [x[1], y[0], center[2]], [x[1], y[1], center[2]], [x[0], y[1], center[2]]];
+  const positions = new Float32Array(8 * 3);
+  let offset = 0;
+  for (const edge of [[0, 1], [1, 2], [2, 3], [3, 0]] as const) {
+    for (const cornerIndex of edge) {
+      const [px, py, pz] = corners[cornerIndex];
+      positions[offset] = px;
+      positions[offset + 1] = py;
+      positions[offset + 2] = pz;
+      offset += 3;
+    }
+  }
+  return positions;
 }
 
 function CameraController({ model, command }: { model: THREE.Group | null; command: CameraCommand }) {
@@ -194,6 +399,8 @@ function BlanketModel({ cameraCommand, onReady, onError }: SceneProps) {
   const selected = useTwinStore((state) => state.selectedComponentId);
   const visibility = useTwinStore((state) => state.componentVisibility);
   const opacity = useTwinStore((state) => state.componentOpacity);
+  const section = useTwinStore((state) => state.section);
+  const visualizationMode = useTwinStore((state) => state.visualizationMode);
   const selectComponent = useTwinStore((state) => state.selectComponent);
   const { invalidate } = useThree();
 
@@ -282,7 +489,7 @@ function BlanketModel({ cameraCommand, onReady, onError }: SceneProps) {
   };
 
   const handleClick = (event: ThreeEvent<MouseEvent>) => {
-    event.stopPropagation();
+    if (!(section === "neutronics" && visualizationMode === "Slice")) event.stopPropagation();
     const group = semanticComponent(event.object);
     if (group) selectComponent(group);
   };
@@ -306,6 +513,7 @@ function BlanketModel({ cameraCommand, onReady, onError }: SceneProps) {
         />
       )}
       <ScientificSlice />
+      <ScientificProbeController />
       <CameraController model={model} command={cameraCommand} />
       <GizmoHelper alignment="bottom-left" margin={[72, 58]}>
         <GizmoViewport axisColors={["#b95c5c", "#55a16e", "#528ec8"]} labelColor="#dce6ea" />
