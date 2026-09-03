@@ -7,7 +7,7 @@ export type WorkspaceSection =
 
 export type GeometrySource = "Parametric CSG" | "STEP" | "Fixed representative GLB";
 export type ScalarSource = "Simulation" | "Surrogate Prediction";
-export type FieldSource = "Not connected" | "Loaded MCNP Simulation";
+export type FieldSource = "Not connected" | "Reference MCNP Field";
 export type VisualizationMode = "Off" | "Slice" | "Iso-surface";
 export type SliceAxis = "X" | "Y" | "Z";
 export type ComponentId = "armor" | "breeder" | "multiplier" | "structure" | "coolant";

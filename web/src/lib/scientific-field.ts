@@ -423,8 +423,6 @@ export function colorScalarValue(value: number, field: ScientificFieldRecord, sc
 export const SCIENTIFIC_COLOR_GRADIENT =
   "linear-gradient(to top, rgb(68 1 84), rgb(65 68 135), rgb(42 120 142), rgb(34 168 132), rgb(122 209 81), rgb(253 231 37))";
 
-export const SCIENTIFIC_ZERO_COLOR = "rgb(38 50 58)";
-
 const ZERO_CELL_COLOR: [number, number, number] = [38 / 255, 50 / 255, 58 / 255];
 
 const COLOR_STOPS = [

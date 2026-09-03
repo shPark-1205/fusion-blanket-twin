@@ -115,9 +115,9 @@ export function KpiRail() {
         <ProvenanceRow label="Scalar KPIs" value={prediction ? scalarSource : "Unavailable"} unavailable={!prediction} />
         <ProvenanceRow label="Domain state" value={prediction?.metadata.domain_status ?? "Unavailable"} unavailable={!prediction} />
         <ProvenanceRow label="Nearest simulation" value={prediction?.metadata.nearest_case ?? "Unavailable"} unavailable={!prediction} />
-        <ProvenanceRow label="3D scientific field" value={scientificStatus === "ready" ? "Loaded MCNP Simulation" : scientificStatus === "error" ? "Asset unavailable" : "Loading"} unavailable={scientificStatus !== "ready"} />
+        <ProvenanceRow label="Scientific field" value={scientificStatus === "ready" ? "Reference MCNP field" : scientificStatus === "error" ? "Asset unavailable" : "Loading"} unavailable={scientificStatus !== "ready"} />
         <ProvenanceRow label="Field" value={scientificStatus === "ready" ? activeFieldName : "Unavailable"} unavailable={scientificStatus !== "ready"} />
-        <ProvenanceRow label="Field representation" value={scientificStatus === "ready" ? "Rectilinear raw cells · Float32" : "Unavailable"} unavailable={scientificStatus !== "ready"} />
+        <ProvenanceRow label="Field representation" value={scientificStatus === "ready" ? "Raw cell-centered · Float32 visualization copy" : "Unavailable"} unavailable={scientificStatus !== "ready"} />
         <ProvenanceRow label="Thermal / CFX" value="Unavailable" unavailable />
         <ProvenanceRow label="Experiment" value="Future / unavailable" unavailable />
       </div>

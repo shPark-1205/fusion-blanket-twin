@@ -9,7 +9,7 @@ Requirements: Python 3.12 with `requirements.txt` installed, Node.js 20 or newer
 Generate the ignored scientific visualization assets from the authoritative local VTKHDF sample:
 
 ```cmd
-set PYTHONPATH=src&& .venv\Scripts\python.exe scripts\export_web_scientific_field.py
+cmd.exe /c "set PYTHONPATH=src&& .venv\Scripts\python.exe scripts\export_web_scientific_field.py"
 ```
 
 The command writes `public/scientific/generated/reference-mcnp/manifest.json` plus one Float32 payload for each canonical MCNP field. These generated files and the master `data/sample/test.vtkhdf` stay ignored; neither is committed or bundled as source. Then run the two development processes separately from the repository root.
@@ -17,16 +17,15 @@ The command writes `public/scientific/generated/reference-mcnp/manifest.json` pl
 Terminal 1 — Python Twin API:
 
 ```cmd
-set PYTHONPATH=src&& .venv\Scripts\python.exe -m uvicorn fusion_blanket_twin.api.app:app --host 127.0.0.1 --port 8000 --reload
+cmd.exe /c "set PYTHONPATH=src&& .venv\Scripts\python.exe -m uvicorn fusion_blanket_twin.api.app:app --host 127.0.0.1 --port 8000"
 ```
 
 Terminal 2 — Next.js frontend:
 
+Install dependencies once with `cmd.exe /c "cd /d web&& npm install"`, then run:
+
 ```cmd
-cd web
-npm install
-set NEXT_PUBLIC_TWIN_API_URL=http://127.0.0.1:8000
-npm run dev
+cmd.exe /c "cd /d web&& set NEXT_PUBLIC_TWIN_API_URL=http://127.0.0.1:8000&& npm run dev"
 ```
 
 Open:
@@ -57,7 +56,7 @@ npx playwright install chromium
 npm run test:e2e
 ```
 
-Playwright starts both the real Python API and the Next.js development server. Its primary integration path exercises the real `ScalarPredictionService`; the separate offline case intentionally blocks API requests to verify graceful degradation. Generated test results, HTML reports, screenshots, and traces are ignored.
+Playwright starts both the real Python API and the Next.js development server. Its primary integration path exercises the real `ScalarPredictionService`; the separate offline case intentionally blocks API requests to verify graceful degradation. Scientific-viewer requests use a small deterministic raw-cell fixture in `tests/scientific-field-fixture.ts`, so browser tests do not depend on ignored local VTKHDF exports. Generated test results, HTML reports, screenshots, and traces are ignored.
 
 ## Architecture
 
@@ -79,14 +78,15 @@ The startup GLB at `public/models/blanket_unit_cell.glb` is a fixed presentation
 
 - Workspace navigation is functional in the browser.
 - Design sliders update local selected values and mark prediction pending; Apply Design requests real scalar KPIs from Python.
-- The PZ/CZ design state and scalar prediction state are distinct from the fixed representative GLB. Changing design values does not deform the displayed CAD.
+- PZ/CZ controls remain pending until Apply Design. Apply Design requests both scalar KPIs and current-family parametric CSG geometry from Python. If that geometry request is unavailable, the fixed representative GLB remains the presentation fallback.
 - Neutron Flux, Photon Flux, Neutron Heating, Photon Heating, Total Nuclear Heating, X/Y/Z raw-cell slices, Linear, and Log controls operate on actual MCNP cell data. The Neutronics slice manager supports up to six simultaneous, independently positioned slices, including multiple slices on one axis. Iso-surface remains disabled.
 - The viewport uses real GLB presentation geometry with orbit, zoom, pan, picking, Reset Camera, Fit Assembly, and fullscreen behavior.
 - Geometry Section View applies a single Three.js clipping plane to the currently displayed CAD source (parametric CSG or GLB fallback). The position range follows that source's millimetre bounds. An amber visual cut-plane marker makes the section location explicit; it is a visual inspection aid rather than an exact material-filled cap, and clipped surfaces remain open because generated cap faces are deferred.
 - Semantic selection, visibility, and opacity update the already-loaded scene without reloading the GLB.
-- The displayed slice uses raw containing-voxel cell values without point interpolation. Its Float32 values are a documented visualization copy; the Float64 VTKHDF remains authoritative. Log display is visualization-only; zero cells use the below-positive-range color and raw values are unchanged.
+- Every displayed slice uses raw containing-voxel cell values without point interpolation. All configured slices share one cached field array, scalar range, scale mode, and colormap. Their Float32 values are documented visualization copies; the Float64 VTKHDF remains authoritative. Log display is visualization-only; zero and nonpositive cells are hidden while raw values remain unchanged.
 - Clicking a displayed slice performs a raw FMESH voxel probe by axis-boundary lookup, not ray-testing millions of cells. The probe reports the slice ID/axis, i/j/k, physical cell bounds, center, and all five canonical field values. Probe Layer Center targets the active slice. Nuclear Heating − (Neutron Heating + Photon Heating) is retained as a visually secondary numerical consistency check, not presented as an independent tally.
 - The loaded field is one fixed reference MCNP simulation. It never follows PZ/CZ scalar-surrogate design changes and is labeled accordingly.
+- The parametric CSG web mesh is functional inspection geometry but remains somewhat faceted/STL-like; presentation-grade boundary-mesh cleanup is deferred.
 - Thermal-hydraulics is an explicitly unavailable workspace; no CFX data source is connected.
 - Illustrative plots are static and do not expose invented scientific values through hover interactions.
 

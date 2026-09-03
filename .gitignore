@@ -12,7 +12,12 @@ runtpe*
 results/
 generated/
 viewer_*.log
+*.log
 chrome_netlog*.json
 chrome_dump*.html
 tmp_chrome_profile*/
 data/local/
+
+# local environment files
+.env*
+!.env.example

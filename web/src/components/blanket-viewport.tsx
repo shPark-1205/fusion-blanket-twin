@@ -10,7 +10,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { BLANKET_GEOMETRY_ADAPTER } from "@/lib/blanket-geometry";
 import { mockTwinState } from "@/lib/mock-twin-state";
 import { useTwinStore } from "@/lib/twin-store";
-import { SCIENTIFIC_COLOR_GRADIENT, SCIENTIFIC_ZERO_COLOR, scalarDomain } from "@/lib/scientific-field";
+import { SCIENTIFIC_COLOR_GRADIENT, scalarDomain } from "@/lib/scientific-field";
 
 const BlanketThreeScene = dynamic(
   () => import("@/components/blanket-three-scene").then((module) => module.BlanketThreeScene),
@@ -179,7 +179,7 @@ export function BlanketViewport() {
                 {scalarTicks.map((tick, index) => <span key={`${tick}-${index}`}>{tick.toExponential(2)}</span>)}
               </div>
             </div>
-            <div className="scalar-zero-key"><i style={{ background: SCIENTIFIC_ZERO_COLOR }} /><span>Zero / nonpositive hidden</span></div>
+            <div className="scalar-zero-key"><span>Zero / nonpositive cells hidden</span></div>
             <small>{scientificLayer ? `${axis} layer ${scientificLayer.lowerBoundMm.toFixed(1)}–${scientificLayer.upperBoundMm.toFixed(1)} mm · center ${scientificLayer.centerMm.toFixed(1)} mm` : `${scaleLabel} · raw cell values`}</small>
             <small>{scientificSlices.filter((slice) => slice.visible).length} visible slice{scientificSlices.filter((slice) => slice.visible).length === 1 ? "" : "s"} · raw cell values</small>
             {log && <small>Positive range starts at {activeRecord.positive_minimum?.toExponential(2)}</small>}

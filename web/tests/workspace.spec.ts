@@ -1,5 +1,11 @@
 import { expect, test } from "@playwright/test";
 
+import { installScientificFieldFixture } from "./scientific-field-fixture";
+
+test.beforeEach(async ({ page }) => {
+  await installScientificFieldFixture(page);
+});
+
 test("every exposed interaction is functional, local-state, or explicitly unavailable", async ({ page }) => {
   const consoleErrors: string[] = [];
   const pageErrors: string[] = [];
@@ -20,7 +26,7 @@ test("every exposed interaction is functional, local-state, or explicitly unavai
   });
   await page.route("**/scientific/**/*.f32", async (route) => {
     await new Promise((resolve) => setTimeout(resolve, 700));
-    await route.continue();
+    await route.fallback();
   });
   page.on("response", (response) => {
     if (response.url().endsWith("/models/blanket_unit_cell.glb")) glbResponseStatus = response.status();
@@ -66,8 +72,8 @@ test("every exposed interaction is functional, local-state, or explicitly unavai
   await expect(page.getByTestId("scientific-scalar-bar")).toBeVisible();
   await expect(page.getByTestId("scientific-scalar-bar")).toContainText("Total Nuclear Heating");
   await expect(page.getByTestId("scientific-scalar-bar")).toContainText("W/cm³");
-  await expect(page.getByTestId("scientific-field-ready")).toHaveAttribute("data-cell-count", "1172380");
-  await expect(page.getByText("Loaded MCNP Simulation", { exact: true }).first()).toBeVisible();
+  await expect(page.getByTestId("scientific-field-ready")).toHaveAttribute("data-cell-count", "27");
+  await expect(page.getByText("Reference MCNP field", { exact: true }).first()).toBeVisible();
   const canvas = page.locator("canvas");
   const canvasBounds = await canvas.boundingBox();
   if (canvasBounds) {
@@ -217,7 +223,7 @@ test("every exposed interaction is functional, local-state, or explicitly unavai
   await page.getByTestId("mode-slice").click();
   await expect(page.getByTestId("scientific-scalar-bar")).toBeVisible();
   await expect(page.getByTestId("scientific-field-ready")).toHaveAttribute("data-visible", "true");
-  await expect(page.getByText("Loaded MCNP Simulation", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("Reference MCNP field", { exact: true }).first()).toBeVisible();
   await expect(page.getByTestId("scalar-source")).toHaveText("Surrogate Prediction");
 
   // Component selection and visibility update both the preview and selected-component panel.
@@ -449,6 +455,50 @@ test("the scientific slice manager supports independent multi-axis and same-axis
   await page.getByTestId("log-scale").check();
   await expect(page.getByTestId("scientific-field-ready")).toHaveAttribute("data-scale-mode", "log");
   await expect(page.getByTestId("scientific-scalar-bar")).toContainText("1 visible slice");
+  await expect(page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).resolves.toBeLessThanOrEqual(0);
+  expect(consoleErrors, `browser console errors:\n${consoleErrors.join("\n")}`).toEqual([]);
+  expect(pageErrors, `uncaught page errors:\n${pageErrors.join("\n")}`).toEqual([]);
+});
+
+test("design, section, camera, opacity, and multi-slice state remain compatible", async ({ page }) => {
+  const consoleErrors: string[] = [];
+  const pageErrors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") consoleErrors.push(message.text());
+  });
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await page.goto("/");
+  await expect(page.getByTestId("geometry-ready")).toBeAttached({ timeout: 15_000 });
+  await expect(page.getByTestId("scientific-field-ready")).toBeAttached({ timeout: 15_000 });
+  await page.getByTestId("nav-neutronics").click();
+  await page.getByTestId("add-scientific-slice").click();
+  await page.getByTestId("scientific-slice-slice-1-axis-y").click();
+  await page.getByTestId("field-selector").selectOption("photon_flux");
+  await page.getByTestId("log-scale").check();
+  await page.getByTestId("section-view-toggle").check();
+  await page.getByTestId("opacity-slider-breeder").press("Home");
+  await page.getByTestId("roll-cw").click();
+  const cameraPosition = await page.getByTestId("geometry-ready").getAttribute("data-camera-position");
+  const cameraTarget = await page.getByTestId("geometry-ready").getAttribute("data-camera-target");
+
+  await page.getByTestId("nav-design").click();
+  await page.getByRole("slider", { name: "PZ 206" }).press("Home");
+  await page.getByTestId("apply-design").click();
+  await expect(page.getByTestId("prediction-status")).toContainText("Predicted · PZ 2.60");
+  await expect(page.getByTestId("geometry-ready")).toHaveAttribute("data-section-enabled", "true");
+  await expect(page.getByTestId("geometry-ready")).toHaveAttribute("data-camera-position", cameraPosition ?? "");
+  await expect(page.getByTestId("geometry-ready")).toHaveAttribute("data-camera-target", cameraTarget ?? "");
+
+  await page.getByTestId("nav-neutronics").click();
+  await expect(page.getByTestId("scientific-field-ready")).toHaveAttribute("data-slice-count", "2");
+  await expect(page.getByTestId("scientific-slice-slice-1")).toHaveAttribute("data-slice-axis", "Y");
+  await expect(page.getByTestId("scientific-slice-slice-2")).toHaveAttribute("data-slice-axis", "Z");
+  await expect(page.getByTestId("scientific-field-ready")).toHaveAttribute("data-active-field", "photon_flux");
+  await expect(page.getByTestId("scientific-field-ready")).toHaveAttribute("data-scale-mode", "log");
+  await expect(page.getByTestId("scientific-scalar-bar")).toBeVisible();
+  await expect(page.getByTestId("opacity-breeder")).toHaveText("15%");
   await expect(page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).resolves.toBeLessThanOrEqual(0);
   expect(consoleErrors, `browser console errors:\n${consoleErrors.join("\n")}`).toEqual([]);
   expect(pageErrors, `uncaught page errors:\n${pageErrors.join("\n")}`).toEqual([]);

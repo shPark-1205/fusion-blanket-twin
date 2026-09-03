@@ -429,7 +429,7 @@ function NeutronicsControls() {
   const layerMetadata = activeSlice;
   const sliceRange = scientificField && layerMetadata ? scientificField.manifest.fields[fieldId].slice_ranges[axis][layerMetadata.layerIndex] : null;
   const statusLabel = scientificStatus === "ready"
-    ? "Loaded MCNP Simulation"
+    ? "Reference MCNP field"
     : scientificStatus === "error"
       ? "Scientific asset unavailable"
       : scientificStatus.replaceAll("-", " ");
@@ -507,7 +507,7 @@ function NeutronicsControls() {
         onOpacity={setSliceOpacity}
       />
       <label className="switch-row">
-        <span><strong>Logarithmic scale</strong><small>{logDisabled ? "Unavailable for non-positive-only data" : "Visualization-only · zero cells use the below-range color"}</small></span>
+        <span><strong>Logarithmic scale</strong><small>{logDisabled ? "Unavailable for non-positive-only data" : "Visualization-only · zero / nonpositive cells remain hidden"}</small></span>
         <input type="checkbox" checked={log && !logDisabled} disabled={logDisabled} onChange={(event) => setLog(event.target.checked)} data-testid="log-scale" />
         <i />
       </label>
@@ -516,7 +516,7 @@ function NeutronicsControls() {
       <MetricRow label="Rendered at center" value={layerMetadata ? layerMetadata.centerMm.toFixed(1) : "Unavailable"} unit={layerMetadata ? "mm" : undefined} />
       <MetricRow label="Global range" value={scientificField ? `${scientificField.manifest.fields[fieldId].web_range[0].toExponential(3)} – ${scientificField.manifest.fields[fieldId].web_range[1].toExponential(3)}` : "Unavailable"} unit={scientificField ? scientificField.manifest.fields[fieldId].display_units : undefined} />
       <MetricRow label="Slice range" value={sliceRange ? `${sliceRange[0].toExponential(3)} – ${sliceRange[1].toExponential(3)}` : "Unavailable"} unit={sliceRange ? scientificField?.manifest.fields[fieldId].display_units : undefined} />
-      <MetricRow label="3D field" value={statusLabel} />
+      <MetricRow label="Scientific field" value={statusLabel} />
       <div className="probe-panel" data-testid="probe-panel">
         <div className="section-label">RAW VOXEL PROBE</div>
         {probeStatus === "loading" && <p data-testid="probe-loading">Loading all field values for probe…</p>}
