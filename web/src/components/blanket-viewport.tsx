@@ -10,6 +10,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { BLANKET_GEOMETRY_ADAPTER } from "@/lib/blanket-geometry";
 import { MODULE_LAYOUT_V1, moduleCellTranslationMm, moduleCellsIntersectingSlice } from "@/lib/module-layout";
 import { mockTwinState } from "@/lib/mock-twin-state";
+import { presentationEmitterDefinition } from "@/lib/presentation-overlays";
 import { useTwinStore } from "@/lib/twin-store";
 import { SCIENTIFIC_COLOR_GRADIENT, scalarDomain } from "@/lib/scientific-field";
 
@@ -52,11 +53,14 @@ export function BlanketViewport() {
   const scientificField = useTwinStore((state) => state.scientificField);
   const scientificError = useTwinStore((state) => state.scientificFieldError);
   const scientificMetrics = useTwinStore((state) => state.scientificLoadMetrics);
+  const plasmaSourceEnabled = useTwinStore((state) => state.plasmaSourceEnabled);
+  const plasmaSourceIntensity = useTwinStore((state) => state.plasmaSourceIntensity);
   const selectedModuleCell = viewScale === "module"
     ? MODULE_LAYOUT_V1.cells.find((cell) => cell.cellId === selectedCellId) ?? null
     : null;
   const referenceFieldVisible = true;
   const selectedModuleTranslation = selectedModuleCell ? moduleCellTranslationMm(selectedModuleCell) : [0, 0, 0] as [number, number, number];
+  const presentationEmitter = presentationEmitterDefinition(viewScale, geometry?.bounds_mm ?? null);
   const field = scientificField?.manifest.fields[fieldId] ?? mockTwinState.fields.find((item) => item.id === fieldId)!;
   const fieldDisplayName = "display_name" in field ? field.display_name : field.displayName;
   const neutronics = section === "neutronics";
@@ -233,6 +237,17 @@ export function BlanketViewport() {
           ))}
         </div>
       )}
+      <div
+        className="geometry-diagnostics"
+        data-testid="plasma-source-ready"
+        data-object-type="shallow-3d-box-volume"
+        data-enabled={plasmaSourceEnabled}
+        data-view-scale={viewScale}
+        data-depth-mm={presentationEmitter.depthMm.toFixed(2)}
+        data-source-center-mm={presentationEmitter.sourceCenterMm.map((value) => value.toFixed(2)).join(",")}
+        data-source-bounds-mm={presentationEmitter.boundsMm.join(",")}
+        data-intensity={plasmaSourceIntensity.toFixed(2)}
+      />
       {referenceFieldVisible && scientificField && scientificStatus === "ready" && (
         <div
           className="geometry-diagnostics"

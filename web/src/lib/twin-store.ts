@@ -78,6 +78,11 @@ interface TwinUiState {
   sectionViewFlip: boolean;
   viewScale: ViewScale;
   selectedCellId: string | null;
+  neutronAnimationEnabled: boolean;
+  neutronAnimationDensity: number;
+  neutronAnimationSpeed: number;
+  plasmaSourceEnabled: boolean;
+  plasmaSourceIntensity: number;
   cameraCommand: CameraCommand;
   initializeTwinApi: () => Promise<void>;
   initializeScientificField: () => Promise<void>;
@@ -109,6 +114,11 @@ interface TwinUiState {
   setSectionViewFlip: (flip: boolean) => void;
   setViewScale: (viewScale: ViewScale) => void;
   selectCell: (cellId: string | null) => void;
+  setNeutronAnimationEnabled: (enabled: boolean) => void;
+  setNeutronAnimationDensity: (density: number) => void;
+  setNeutronAnimationSpeed: (speed: number) => void;
+  setPlasmaSourceEnabled: (enabled: boolean) => void;
+  setPlasmaSourceIntensity: (intensity: number) => void;
   requestCamera: (action: CameraCommand["action"]) => void;
 }
 
@@ -156,6 +166,11 @@ export const useTwinStore = create<TwinUiState>((set, get) => ({
   sectionViewFlip: false,
   viewScale: "single-cell",
   selectedCellId: null,
+  neutronAnimationEnabled: false,
+  neutronAnimationDensity: 64,
+  neutronAnimationSpeed: 1,
+  plasmaSourceEnabled: false,
+  plasmaSourceIntensity: 0.7,
   cameraCommand: { action: "reset", sequence: 0 },
   initializeTwinApi: () => {
     initializationPromise ??= initializeTwinState();
@@ -395,6 +410,11 @@ export const useTwinStore = create<TwinUiState>((set, get) => ({
     cameraCommand: { action: "fit", sequence: state.cameraCommand.sequence + 1 },
   })),
   selectCell: (selectedCellId) => set({ selectedCellId, scientificProbe: null, scientificProbeStatus: "idle", scientificProbeError: null }),
+  setNeutronAnimationEnabled: (neutronAnimationEnabled) => set({ neutronAnimationEnabled }),
+  setNeutronAnimationDensity: (neutronAnimationDensity) => set({ neutronAnimationDensity: clampNeutronDensity(neutronAnimationDensity) }),
+  setNeutronAnimationSpeed: (neutronAnimationSpeed) => set({ neutronAnimationSpeed: clampNeutronSpeed(neutronAnimationSpeed) }),
+  setPlasmaSourceEnabled: (plasmaSourceEnabled) => set({ plasmaSourceEnabled }),
+  setPlasmaSourceIntensity: (plasmaSourceIntensity) => set({ plasmaSourceIntensity: clampPlasmaIntensity(plasmaSourceIntensity) }),
   requestCamera: (action) => set((state) => ({ cameraCommand: { action, sequence: state.cameraCommand.sequence + 1 } })),
 }));
 
@@ -522,6 +542,18 @@ export const MAX_SCIENTIFIC_SLICES = 6;
 
 function clampSliceOpacity(opacity: number) {
   return Math.max(0.25, Math.min(1, opacity));
+}
+
+function clampNeutronDensity(density: number) {
+  return Math.round(Math.max(12, Math.min(180, density)));
+}
+
+function clampNeutronSpeed(speed: number) {
+  return Math.max(0.25, Math.min(2.5, speed));
+}
+
+function clampPlasmaIntensity(intensity: number) {
+  return Math.max(0.1, Math.min(1.5, intensity));
 }
 
 function nextSliceId(slices: ScientificSlice[]) {

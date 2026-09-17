@@ -251,6 +251,48 @@ function GeometrySectionControls() {
   );
 }
 
+function NeutronAnimationControls() {
+  const enabled = useTwinStore((state) => state.neutronAnimationEnabled);
+  const density = useTwinStore((state) => state.neutronAnimationDensity);
+  const speed = useTwinStore((state) => state.neutronAnimationSpeed);
+  const plasmaEnabled = useTwinStore((state) => state.plasmaSourceEnabled);
+  const plasmaIntensity = useTwinStore((state) => state.plasmaSourceIntensity);
+  const setEnabled = useTwinStore((state) => state.setNeutronAnimationEnabled);
+  const setDensity = useTwinStore((state) => state.setNeutronAnimationDensity);
+  const setSpeed = useTwinStore((state) => state.setNeutronAnimationSpeed);
+  const setPlasmaEnabled = useTwinStore((state) => state.setPlasmaSourceEnabled);
+  const setPlasmaIntensity = useTwinStore((state) => state.setPlasmaSourceIntensity);
+  return (
+    <div className="panel-section display-controls neutron-animation-controls" data-testid="neutron-animation-controls">
+      <div className="section-label">PRESENTATION OVERLAY</div>
+      <label className="switch-row" data-testid="neutron-animation-status" data-enabled={enabled}>
+        <span><strong>Neutron Animation</strong><small>{enabled ? "Incoming overlay active" : "Incoming overlay off"}</small></span>
+        <input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} aria-label="Neutron Animation On / Off" data-testid="neutron-animation-toggle" />
+        <i />
+      </label>
+      <label className="opacity-control">
+        <span><strong>Density</strong><output data-testid="neutron-animation-density-value">{density} particles</output></span>
+        <input type="range" min="12" max="180" step="12" value={density} onChange={(event) => setDensity(Number(event.target.value))} aria-label="Neutron animation density" data-testid="neutron-animation-density" />
+      </label>
+      <label className="opacity-control">
+        <span><strong>Speed</strong><output data-testid="neutron-animation-speed-value">{speed.toFixed(2)}×</output></span>
+        <input type="range" min="0.25" max="2.5" step="0.25" value={speed} onChange={(event) => setSpeed(Number(event.target.value))} aria-label="Neutron animation speed" data-testid="neutron-animation-speed" />
+      </label>
+      <label className="switch-row" data-testid="plasma-source-status" data-enabled={plasmaEnabled}>
+        <span><strong>Plasma Source</strong><small>{plasmaEnabled ? "Source glow active" : "Source glow off"}</small></span>
+        <input type="checkbox" checked={plasmaEnabled} onChange={(event) => setPlasmaEnabled(event.target.checked)} aria-label="Plasma Source On / Off" data-testid="plasma-source-toggle" />
+        <i />
+      </label>
+      <label className="opacity-control">
+        <span><strong>Plasma Intensity</strong><output data-testid="plasma-intensity-value">{plasmaIntensity.toFixed(2)}</output></span>
+        <input type="range" min="0.1" max="1.5" step="0.1" value={plasmaIntensity} onChange={(event) => setPlasmaIntensity(Number(event.target.value))} aria-label="Plasma intensity" data-testid="plasma-intensity" />
+      </label>
+      <p className="control-help">Decorative neutron animation · presentation overlay · not a particle-transport simulation.</p>
+      <p className="control-help">Decorative plasma source · presentation-only source glow · not a plasma simulation.</p>
+    </div>
+  );
+}
+
 function ScientificDisplayControls() {
   const opacity = useTwinStore((state) => state.scientificSliceOpacity);
   const setOpacity = useTwinStore((state) => state.setAllScientificSliceOpacity);
@@ -715,6 +757,7 @@ export function ControlPanel() {
       <PanelHeading eyebrow={eyebrow} title={title} />
       <div className="control-scroll">
         <ScaleModeControls />
+        <NeutronAnimationControls />
         {section === "overview" && <OverviewControls />}
         {section === "design" && <DesignControls />}
         {section === "neutronics" && viewScale === "module" && <ModuleScientificNotice />}

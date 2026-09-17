@@ -793,6 +793,65 @@ test("module reference neutronics tiles global slices without duplicating the fi
   expect(pageErrors, `uncaught page errors:\n${pageErrors.join("\n")}`).toEqual([]);
 });
 
+test("neutron arrival animation is a controllable presentation overlay at both scales", async ({ page }) => {
+  const consoleErrors: string[] = [];
+  const pageErrors: string[] = [];
+  page.on("console", (message) => { if (message.type() === "error") consoleErrors.push(message.text()); });
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await page.goto("/");
+  await expect(page.getByTestId("geometry-ready")).toBeAttached({ timeout: 15_000 });
+  await expect(page.getByTestId("neutron-animation-controls")).toBeVisible();
+  await expect(page.getByTestId("plasma-source-ready")).toHaveAttribute("data-view-scale", "single-cell");
+  await expect(page.getByTestId("plasma-source-ready")).toHaveAttribute("data-object-type", "shallow-3d-box-volume");
+  expect(Number(await page.getByTestId("plasma-source-ready").getAttribute("data-depth-mm"))).toBeGreaterThan(0);
+  const singleCellSourceBounds = await page.getByTestId("plasma-source-ready").getAttribute("data-source-bounds-mm");
+  await expect(page.getByTestId("neutron-animation-status")).toHaveAttribute("data-enabled", "false");
+  await expect(page.getByTestId("neutron-animation-toggle")).not.toBeChecked();
+  await expect(page.getByTestId("plasma-source-status")).toHaveAttribute("data-enabled", "false");
+  await expect(page.getByTestId("plasma-source-toggle")).not.toBeChecked();
+  await expect(page.getByText("not a particle-transport simulation", { exact: false })).toBeVisible();
+  await expect(page.getByText("not a plasma simulation", { exact: false })).toBeVisible();
+
+  await page.getByTestId("neutron-animation-toggle").check();
+  await expect(page.getByTestId("neutron-animation-status")).toHaveAttribute("data-enabled", "true");
+  await expect(page.getByTestId("neutron-animation-toggle")).toBeChecked();
+  await page.getByTestId("neutron-animation-density").press("End");
+  await expect(page.getByTestId("neutron-animation-density-value")).toHaveText("180 particles");
+  await page.getByTestId("neutron-animation-speed").press("Home");
+  await expect(page.getByTestId("neutron-animation-speed-value")).toHaveText("0.25×");
+  await page.getByTestId("plasma-source-toggle").check();
+  await expect(page.getByTestId("plasma-source-status")).toHaveAttribute("data-enabled", "true");
+  await expect(page.getByTestId("plasma-source-toggle")).toBeChecked();
+  await expect(page.getByTestId("plasma-source-ready")).toHaveAttribute("data-enabled", "true");
+  await page.getByTestId("plasma-intensity").press("End");
+  await expect(page.getByTestId("plasma-intensity-value")).toHaveText("1.50");
+
+  await page.getByTestId("nav-neutronics").click();
+  await expect(page.getByTestId("field-selector")).toBeVisible();
+  await expect(page.getByTestId("scientific-slice-manager")).toBeVisible();
+  await page.getByTestId("section-view-toggle").check();
+  await expect(page.getByTestId("geometry-ready")).toHaveAttribute("data-clipping-plane-count", "1");
+
+  await page.getByTestId("view-scale-module").click();
+  await expect(page.getByTestId("geometry-ready")).toHaveAttribute("data-view-scale", "module");
+  await expect(page.getByTestId("plasma-source-ready")).toHaveAttribute("data-view-scale", "module");
+  await expect(page.getByTestId("plasma-source-ready")).not.toHaveAttribute("data-source-bounds-mm", singleCellSourceBounds ?? "");
+  expect(Number(await page.getByTestId("plasma-source-ready").getAttribute("data-depth-mm"))).toBeGreaterThan(0);
+  await expect(page.getByTestId("neutron-animation-toggle")).toBeChecked();
+  await expect(page.getByTestId("neutron-animation-status")).toHaveAttribute("data-enabled", "true");
+  await expect(page.getByTestId("plasma-source-toggle")).toBeChecked();
+  await expect(page.getByTestId("plasma-source-status")).toHaveAttribute("data-enabled", "true");
+  await page.getByTestId("plasma-source-toggle").uncheck();
+  await expect(page.getByTestId("plasma-source-status")).toHaveAttribute("data-enabled", "false");
+  await page.getByTestId("neutron-animation-toggle").uncheck();
+  await expect(page.getByTestId("neutron-animation-status")).toHaveAttribute("data-enabled", "false");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0);
+  expect(consoleErrors, `browser console errors:\n${consoleErrors.join("\n")}`).toEqual([]);
+  expect(pageErrors, `uncaught page errors:\n${pageErrors.join("\n")}`).toEqual([]);
+});
+
 test("the engineering workspace remains readable and unclipped at target desktop resolutions", async ({ page }) => {
   const resolutions = [
     { width: 1366, height: 768 },

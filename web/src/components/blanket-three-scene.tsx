@@ -1,7 +1,7 @@
 "use client";
 
 import { GizmoHelper, GizmoViewport, Html, OrbitControls } from "@react-three/drei";
-import { Canvas, type ThreeEvent, useThree } from "@react-three/fiber";
+import { Canvas, type ThreeEvent, useFrame, useThree } from "@react-three/fiber";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
@@ -13,6 +13,7 @@ import {
   semanticComponentForNames,
 } from "@/lib/blanket-geometry";
 import { MODULE_LAYOUT_V1, moduleCellTranslationMm, moduleCellsIntersectingSlice, moduleLocalSlicePositionMm, type ModuleCellInstance, type ModuleLayout } from "@/lib/module-layout";
+import { presentationEmitterDefinition } from "@/lib/presentation-overlays";
 import type { CameraCommand } from "@/lib/twin-store";
 import { useTwinStore } from "@/lib/twin-store";
 import type { ComponentId, ScientificFieldId, ScientificSlice, SliceAxis } from "@/lib/twin-types";
@@ -236,6 +237,205 @@ function SectionPlaneMarker({
         <lineBasicMaterial color="#f0b866" transparent opacity={0.92} depthTest={false} depthWrite={false} toneMapped={false} />
       </lineLoop>
     </>
+  );
+}
+
+type ArrivalParticle = {
+  originX: number;
+  originY: number;
+  x: number;
+  y: number;
+  z: number;
+  speed: number;
+  driftX: number;
+  driftY: number;
+};
+
+function seededUnit(index: number, salt: number) {
+  const value = Math.sin((index + 1) * (12.9898 + salt * 78.233)) * 43758.5453;
+  return value - Math.floor(value);
+}
+
+function NeutronArrivalAnimation() {
+  const enabled = useTwinStore((state) => state.neutronAnimationEnabled);
+  const density = useTwinStore((state) => state.neutronAnimationDensity);
+  const speedMultiplier = useTwinStore((state) => state.neutronAnimationSpeed);
+  const viewScale = useTwinStore((state) => state.viewScale);
+  const geometry = useTwinStore((state) => state.geometry);
+  const mesh = useRef<THREE.InstancedMesh>(null);
+  const dummy = useMemo(() => new THREE.Object3D(), []);
+  const particleGeometry = useMemo(() => new THREE.SphereGeometry(1.15, 6, 4), []);
+  const particleMaterial = useMemo(() => new THREE.MeshBasicMaterial({
+    color: "#c7f5ff",
+    transparent: true,
+    opacity: 0.74,
+    depthTest: false,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    toneMapped: false,
+  }), []);
+  const emitterDefinition = useMemo(
+    () => presentationEmitterDefinition(viewScale, geometry?.bounds_mm ?? null),
+    [geometry?.bounds_mm, viewScale],
+  );
+  const emitter = useMemo(() => {
+    const [x0, x1, y0, y1] = emitterDefinition.boundsMm;
+    const { startZ, endZ } = emitterDefinition;
+    const particles: ArrivalParticle[] = [];
+    for (let index = 0; index < density; index += 1) {
+      const x = x0 + (x1 - x0) * seededUnit(index, 0.17);
+      const y = y0 + (y1 - y0) * seededUnit(index, 0.43);
+      const phase = seededUnit(index, 0.71);
+      particles.push({
+        originX: x,
+        originY: y,
+        x,
+        y,
+        z: startZ + (endZ - startZ) * phase,
+        speed: 82 + seededUnit(index, 0.89) * 58,
+        driftX: (seededUnit(index, 1.13) - 0.5) * 16,
+        driftY: (seededUnit(index, 1.47) - 0.5) * 16,
+      });
+    }
+    return { particles, startZ, endZ };
+  }, [density, emitterDefinition]);
+  const particleState = useRef(emitter);
+
+  useEffect(() => {
+    particleState.current = emitter;
+  }, [emitter]);
+
+  useFrame((_, delta) => {
+    if (!mesh.current || !enabled) return;
+    const frameDelta = Math.min(delta, 0.05);
+    const { particles, startZ, endZ } = particleState.current;
+    for (let index = 0; index < particles.length; index += 1) {
+      const particle = particles[index];
+      particle.z += particle.speed * speedMultiplier * frameDelta;
+      particle.x += particle.driftX * speedMultiplier * frameDelta;
+      particle.y += particle.driftY * speedMultiplier * frameDelta;
+      if (particle.z > endZ) {
+        particle.z = startZ;
+        particle.x = particle.originX;
+        particle.y = particle.originY;
+      }
+      dummy.position.set(particle.x, particle.y, particle.z);
+      dummy.scale.set(1, 1, 4.5);
+      dummy.updateMatrix();
+      mesh.current.setMatrixAt(index, dummy.matrix);
+    }
+    mesh.current.instanceMatrix.needsUpdate = true;
+  });
+
+  if (!enabled) return null;
+  return (
+    <group
+      scale={BLANKET_GEOMETRY_ADAPTER.sourceToSceneScale}
+      renderOrder={16}
+      userData={{ neutronArrivalAnimation: true, presentationOverlay: true, particleCount: emitter.particles.length }}
+    >
+      <instancedMesh
+        ref={mesh}
+        args={[particleGeometry, particleMaterial, emitter.particles.length]}
+        frustumCulled={false}
+        renderOrder={16}
+        userData={{ neutronArrivalAnimation: true, decorative: true, notTransportSimulation: true }}
+      />
+    </group>
+  );
+}
+
+const plasmaVertexShader = `
+  varying vec3 vLocalPosition;
+  varying vec3 vLocalNormal;
+  void main() {
+    vLocalPosition = position;
+    vLocalNormal = normal;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
+const plasmaFragmentShader = `
+  uniform float uTime;
+  uniform float uIntensity;
+  uniform vec3 uHalfSize;
+  varying vec3 vLocalPosition;
+  varying vec3 vLocalNormal;
+  void main() {
+    vec3 normalized = vLocalPosition / uHalfSize;
+    float frontFace = abs(vLocalNormal.z);
+    float sideFace = 1.0 - frontFace;
+    float radialFalloff = 1.0 - smoothstep(0.42, 1.02, length(normalized.xy));
+    float depthFalloff = 1.0 - smoothstep(0.22, 1.02, abs(normalized.z));
+    float falloff = frontFace * radialFalloff + sideFace * depthFalloff;
+    float core = 1.0 - smoothstep(0.02, 0.82, length(normalized.xy));
+    float noise = 0.92 + 0.08 * sin(uTime * 0.9 + normalized.x * 3.2 + normalized.y * 2.1 + normalized.z * 4.0);
+    float pulse = 0.9 + 0.1 * sin(uTime * 1.1);
+    vec3 violet = vec3(0.18, 0.22, 0.95);
+    vec3 cyan = vec3(0.2, 0.88, 1.0);
+    vec3 white = vec3(0.92, 1.0, 1.0);
+    vec3 color = mix(violet, cyan, core);
+    color = mix(color, white, core * 0.72);
+    float alpha = falloff * (0.13 + core * 0.5) * pulse * noise * uIntensity;
+    gl_FragColor = vec4(color, alpha);
+  }
+`;
+
+function PlasmaSourceEffect() {
+  const enabled = useTwinStore((state) => state.plasmaSourceEnabled);
+  const intensity = useTwinStore((state) => state.plasmaSourceIntensity);
+  const viewScale = useTwinStore((state) => state.viewScale);
+  const geometry = useTwinStore((state) => state.geometry);
+  const material = useMemo(() => new THREE.ShaderMaterial({
+    uniforms: {
+      uTime: { value: 0 },
+      uIntensity: { value: 1 },
+      uHalfSize: { value: new THREE.Vector3(1, 1, 1) },
+    },
+    vertexShader: plasmaVertexShader,
+    fragmentShader: plasmaFragmentShader,
+    transparent: true,
+    depthTest: false,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    side: THREE.DoubleSide,
+    toneMapped: false,
+  }), []);
+  const materialRef = useRef<THREE.ShaderMaterial | null>(null);
+  const definition = useMemo(
+    () => presentationEmitterDefinition(viewScale, geometry?.bounds_mm ?? null),
+    [geometry?.bounds_mm, viewScale],
+  );
+  const width = Math.max(definition.boundsMm[1] - definition.boundsMm[0], 1);
+  const height = Math.max(definition.boundsMm[3] - definition.boundsMm[2], 1);
+
+  useEffect(() => {
+    materialRef.current = material;
+  }, [material]);
+
+  useEffect(() => {
+    if (materialRef.current) materialRef.current.uniforms.uIntensity.value = intensity;
+  }, [intensity, material]);
+
+  useEffect(() => {
+    if (materialRef.current) materialRef.current.uniforms.uHalfSize.value.set(width * 0.49, height * 0.49, definition.depthMm * 0.5);
+  }, [definition.depthMm, height, material, width]);
+
+  useFrame(({ clock }) => {
+    if (materialRef.current) materialRef.current.uniforms.uTime.value = clock.elapsedTime;
+  });
+
+  if (!enabled) return null;
+  return (
+    <mesh
+      position={definition.sourceCenterMm.map((value) => value * BLANKET_GEOMETRY_ADAPTER.sourceToSceneScale) as [number, number, number]}
+      scale={BLANKET_GEOMETRY_ADAPTER.sourceToSceneScale}
+      renderOrder={14}
+      userData={{ plasmaSource: true, presentationOverlay: true, decorative: true, notPlasmaSimulation: true, depthMm: definition.depthMm }}
+    >
+      <boxGeometry args={[width * 0.98, height * 0.98, definition.depthMm]} />
+      <primitive object={material} attach="material" />
+    </mesh>
   );
 }
 
@@ -918,6 +1118,8 @@ function BlanketModel({ cameraCommand, onReady, onError, onCameraState }: SceneP
           positionMm={sectionDisplayPositionMm}
         />
       )}
+      <PlasmaSourceEffect />
+      <NeutronArrivalAnimation />
       {viewScale === "module" && selectedCellId && displayModel && (() => {
         const cell = MODULE_LAYOUT_V1.cells.find((item) => item.cellId === selectedCellId);
         return cell ? <CellSelectionHighlight cell={cell} bounds={MODULE_LAYOUT_V1.sourceCellGeometry.boundsMm} /> : null;
