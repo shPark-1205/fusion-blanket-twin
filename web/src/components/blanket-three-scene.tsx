@@ -12,7 +12,7 @@ import {
   COMPONENT_APPEARANCE,
   semanticComponentForNames,
 } from "@/lib/blanket-geometry";
-import { MODULE_LAYOUT_V1, type ModuleCellInstance, type ModuleLayout } from "@/lib/module-layout";
+import { MODULE_LAYOUT_V1, moduleCellTranslationMm, moduleCellsIntersectingSlice, moduleLocalSlicePositionMm, type ModuleCellInstance, type ModuleLayout } from "@/lib/module-layout";
 import type { CameraCommand } from "@/lib/twin-store";
 import { useTwinStore } from "@/lib/twin-store";
 import type { ComponentId, ScientificFieldId, ScientificSlice, SliceAxis } from "@/lib/twin-types";
@@ -21,6 +21,7 @@ import {
   axisBoundaries,
   colorScalarValue,
   linearCellIndex,
+  selectedLayer,
   type ScientificFieldManifest,
   type ScientificVoxelProbe,
 } from "@/lib/scientific-field";
@@ -121,7 +122,7 @@ function buildModuleModel(source: THREE.Group, layout: ModuleLayout): THREE.Grou
     if (!cell.enabled) continue;
     const instance = source.clone(true);
     instance.name = `Cell:${cell.cellId}`;
-    instance.position.set(cell.positionMm.x, cell.positionMm.y, 0);
+    instance.position.set(...moduleCellTranslationMm(cell));
     setCellIdentity(instance, cell);
     assembly.add(instance);
   }
@@ -253,41 +254,80 @@ function ScientificSliceScene() {
   const { invalidate } = useThree();
   const manifest = scientificData?.manifest ?? null;
   const values = scientificData?.valuesByField[activeFieldId] ?? null;
-  const slices = useMemo(() => {
-    if (viewScale !== "single-cell" || !manifest || !values || section !== "neutronics" || mode !== "Slice") return null;
+  const moduleMode = viewScale === "module";
+  const patches = useMemo(() => {
+    if (!manifest || !values || section !== "neutronics" || mode !== "Slice") return null;
     const field = manifest.fields[activeFieldId];
-    return scientificSlices
-      .filter((slice) => slice.visible)
-      .map((slice) => ({
-        slice,
-        geometry: buildSliceGeometry(manifest, values, field.key, slice, useLogScale ? "log" : "linear"),
-      }));
-  }, [activeFieldId, manifest, mode, scientificSlices, section, useLogScale, values, viewScale]);
+    const geometryCache = new Map<string, ReturnType<typeof buildSliceGeometry>>();
+    const nextPatches: Array<{
+      sourceSliceId: string;
+      slice: ScientificSlice;
+      moduleCell: ModuleCellInstance | null;
+      geometry: ReturnType<typeof buildSliceGeometry>;
+    }> = [];
+    for (const sourceSlice of scientificSlices.filter((slice) => slice.visible)) {
+      const cells = moduleMode ? moduleCellsIntersectingSlice(MODULE_LAYOUT_V1, sourceSlice.axis, sourceSlice.requestedPositionMm) : [null];
+      for (const moduleCell of cells) {
+        const localSlice = moduleCell ? localModuleSlice(manifest, sourceSlice, moduleCell) : sourceSlice;
+        const cacheKey = `${sourceSlice.id}:${localSlice.axis}:${localSlice.layerIndex}:${activeFieldId}:${useLogScale ? "log" : "linear"}`;
+        let geometry = geometryCache.get(cacheKey);
+        if (!geometry) {
+          geometry = buildSliceGeometry(manifest, values, field.key, localSlice, useLogScale ? "log" : "linear");
+          geometryCache.set(cacheKey, geometry);
+        }
+        nextPatches.push({ sourceSliceId: sourceSlice.id, slice: localSlice, moduleCell, geometry });
+      }
+    }
+    return nextPatches;
+  }, [activeFieldId, manifest, mode, moduleMode, scientificSlices, section, useLogScale, values]);
 
   useEffect(() => {
-    if (!slices) return;
+    if (!patches) return;
     const requested = performance.now();
     const frame = requestAnimationFrame(() => {
       const loadMs = useTwinStore.getState().scientificLoadMetrics?.totalMs ?? 0;
       const updateMs = performance.now() - requested;
-      reportRender(loadMs + updateMs, updateMs);
+      reportRender(
+        loadMs + updateMs,
+        updateMs,
+        new Set(patches.map((patch) => patch.sourceSliceId)).size,
+        patches.reduce((total, patch) => total + patch.geometry.positions.length / 3, 0),
+        patches.length,
+      );
       invalidate();
     });
     return () => cancelAnimationFrame(frame);
-  }, [invalidate, reportRender, slices]);
+  }, [invalidate, patches, reportRender]);
 
-  if (!slices) return null;
-  return <>{slices.map(({ slice, geometry }) => (
+  if (!patches) return null;
+  return <>{patches.map(({ sourceSliceId, slice, moduleCell, geometry }) => (
     <ScientificSliceLayer
-      key={slice.id}
+      key={`${sourceSliceId}-${moduleCell?.cellId ?? "single-cell"}`}
       slice={slice}
       geometry={geometry}
       active={slice.id === activeSliceId}
       probe={probe}
       activeFieldId={activeFieldId}
+      translationMm={moduleCell ? moduleCellTranslationMm(moduleCell) : [0, 0, 0]}
+      moduleCellId={moduleCell?.cellId ?? null}
+      moduleMode={moduleMode}
+      globalSliceId={sourceSliceId}
       onProbe={probeVoxel}
     />
   ))}</>;
+}
+
+function localModuleSlice(manifest: ScientificFieldManifest, slice: ScientificSlice, cell: ModuleCellInstance): ScientificSlice {
+  const localPosition = moduleLocalSlicePositionMm(cell, slice.axis, slice.requestedPositionMm);
+  const layer = selectedLayer(manifest, slice.axis, localPosition);
+  return {
+    ...slice,
+    requestedPositionMm: localPosition,
+    layerIndex: layer.index,
+    lowerBoundMm: layer.bounds_mm[0],
+    upperBoundMm: layer.bounds_mm[1],
+    centerMm: layer.center_mm,
+  };
 }
 
 function ScientificSliceLayer({
@@ -296,6 +336,10 @@ function ScientificSliceLayer({
   active,
   probe,
   activeFieldId,
+  translationMm,
+  moduleCellId,
+  moduleMode,
+  globalSliceId,
   onProbe,
 }: {
   slice: ScientificSlice;
@@ -303,27 +347,38 @@ function ScientificSliceLayer({
   active: boolean;
   probe: ScientificVoxelProbe | null;
   activeFieldId: ScientificFieldId;
-  onProbe: (sliceId: string, pointMm: [number, number, number]) => Promise<void>;
+  translationMm: [number, number, number];
+  moduleCellId: string | null;
+  moduleMode: boolean;
+  globalSliceId: string;
+  onProbe: (sliceId: string, pointMm: [number, number, number], moduleCellId?: string, localSlicePositionMm?: number) => Promise<void>;
 }) {
   const selectSlice = useTwinStore((state) => state.selectScientificSlice);
+  const moduleOverlay = moduleMode;
+  const renderOrderBase = moduleOverlay ? 20 : 8;
   const highlightPositions = useMemo(() => {
     const axisIndex = slice.axis === "X" ? "i" : slice.axis === "Y" ? "j" : "k";
-    return probe?.sliceId === slice.id && probe.indices[axisIndex] === slice.layerIndex
+    const probeMatchesCell = moduleCellId === null || probe?.moduleCell?.cellId === moduleCellId;
+    return probeMatchesCell && probe?.sliceId === globalSliceId && probe.indices[axisIndex] === slice.layerIndex
       ? buildProbeHighlight(slice.axis, probe)
       : null;
-  }, [probe, slice]);
+  }, [globalSliceId, moduleCellId, probe, slice]);
   const handleClick = (event: ThreeEvent<MouseEvent>) => {
     event.stopPropagation();
     selectSlice(slice.id);
     const scale = BLANKET_GEOMETRY_ADAPTER.sourceToSceneScale;
-    void onProbe(slice.id, [event.point.x / scale, event.point.y / scale, event.point.z / scale]);
+    void onProbe(globalSliceId, [
+      event.point.x / scale - translationMm[0],
+      event.point.y / scale - translationMm[1],
+      event.point.z / scale - translationMm[2],
+    ], moduleCellId ?? undefined, slice.requestedPositionMm);
   };
 
   return (
-    <>
+    <group position={translationMm.map((value) => value * BLANKET_GEOMETRY_ADAPTER.sourceToSceneScale) as [number, number, number]} userData={{ scientificReferenceCellId: moduleCellId ?? undefined, scientificLocalCoordinates: true, scientificOverlay: moduleOverlay, scientificVertexCount: geometry.positions.length / 3 }}>
       <mesh
         scale={BLANKET_GEOMETRY_ADAPTER.sourceToSceneScale}
-        renderOrder={8}
+        renderOrder={renderOrderBase}
         onClick={handleClick}
         userData={{ scientificField: activeFieldId, scientificSliceId: slice.id, sliceAxis: slice.axis, layer: slice.layerIndex, centerMm: slice.centerMm }}
       >
@@ -331,16 +386,16 @@ function ScientificSliceLayer({
           <bufferAttribute attach="attributes-position" args={[geometry.positions, 3]} />
           <bufferAttribute attach="attributes-color" args={[geometry.colors, 3]} />
         </bufferGeometry>
-        <meshBasicMaterial vertexColors side={THREE.DoubleSide} transparent={slice.opacity < 0.999} opacity={slice.opacity} depthWrite={slice.opacity >= 0.999} depthTest toneMapped={false} />
+        <meshBasicMaterial vertexColors side={THREE.DoubleSide} transparent={slice.opacity < 0.999} opacity={slice.opacity} depthWrite={moduleOverlay ? false : slice.opacity >= 0.999} depthTest={!moduleOverlay} toneMapped={false} />
       </mesh>
-      <lineLoop scale={BLANKET_GEOMETRY_ADAPTER.sourceToSceneScale} renderOrder={10}>
+      <lineLoop scale={BLANKET_GEOMETRY_ADAPTER.sourceToSceneScale} renderOrder={renderOrderBase + 2}>
         <bufferGeometry>
           <bufferAttribute attach="attributes-position" args={[geometry.borderPositions, 3]} />
         </bufferGeometry>
         <lineBasicMaterial color={active ? "#f4fbff" : "#67c7cb"} transparent opacity={active ? 0.95 : 0.7} depthTest={false} toneMapped={false} />
       </lineLoop>
       {highlightPositions && (
-        <lineSegments scale={BLANKET_GEOMETRY_ADAPTER.sourceToSceneScale} renderOrder={11}>
+        <lineSegments scale={BLANKET_GEOMETRY_ADAPTER.sourceToSceneScale} renderOrder={renderOrderBase + 3}>
           <bufferGeometry>
             <bufferAttribute attach="attributes-position" args={[highlightPositions, 3]} />
           </bufferGeometry>
@@ -349,7 +404,7 @@ function ScientificSliceLayer({
       )}
       <mesh
         scale={BLANKET_GEOMETRY_ADAPTER.sourceToSceneScale}
-        renderOrder={9}
+        renderOrder={renderOrderBase + 1}
         onClick={handleClick}
         userData={{ scientificPickPlane: true, scientificSliceId: slice.id, sliceAxis: slice.axis, layer: slice.layerIndex }}
       >
@@ -358,7 +413,7 @@ function ScientificSliceLayer({
         </bufferGeometry>
         <meshBasicMaterial side={THREE.DoubleSide} transparent opacity={0} depthWrite={false} depthTest={false} />
       </mesh>
-    </>
+    </group>
   );
 }
 

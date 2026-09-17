@@ -23,4 +23,4 @@ The seven transverse lanes use explicit occupancy data with four cells per lane:
 
 The frontend builds one parametric or GLB single-cell component tree, shares its `BufferGeometry` across cloned cell instance trees, and changes only X/Y translation. Component visibility and opacity are global group controls. Cell selection is represented by a lightweight hex outline and identity panel.
 
-Module mode computes and uses the real array bounds for camera fitting and section clipping. Scientific field slices and probes remain single-cell functionality. Module mode does not repeat those fields and reports that module-scale MCNP field data is not available yet.
+Module mode computes and uses the real array bounds for camera fitting and section clipping. Its scientific view is a tiled reference preview: one cached single-cell MCNP dataset (case `107-E`) is sliced in global module X/Y/Z coordinates, mapped into each intersected cell's local FMESH coordinates, and rendered as separate valid cell patches. Values remain unchanged and no interpolation bridges cells. This is explicitly not a module-scale MCNP result; true module MCNP and CFX data remain deferred.

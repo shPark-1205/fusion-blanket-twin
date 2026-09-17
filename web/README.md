@@ -90,7 +90,8 @@ The startup GLB at `public/models/blanket_unit_cell.glb` is a fixed presentation
 - The loaded field is one fixed reference MCNP simulation. It never follows PZ/CZ scalar-surrogate design changes and is labeled accordingly.
 - The parametric CSG web mesh is functional inspection geometry but remains somewhat faceted/STL-like; presentation-grade boundary-mesh cleanup is deferred.
 - Thermal-hydraulics is an explicitly unavailable workspace; no CFX data source is connected.
-- Scientific slices and probes remain available only in Single Cell mode. Module mode clearly reports `Module-scale MCNP field data is not available yet.` and does not repeat the representative single-cell MCNP field across the array.
+- Scientific slices and probes remain single-cell reference data. In Module mode, the existing MCNP case `107-E` controls are available immediately and global X/Y/Z planes produce separate valid patches only on intersected module cells. Field arrays and local coordinates remain unchanged; no interpolation bridges cells. The UI labels this `Single-cell reference MCNP field` / `Repeated across module cells for visualization` / `Not a module-scale simulation`. True module-scale MCNP remains future work.
+- The selected-cell Module reference slice uses a scoped scientific overlay so an internal contour remains visible through the selected cell's opaque CAD. This does not make the module globally transparent and does not change field values or spatial registration.
 - Illustrative plots are static and do not expose invented scientific values through hover interactions.
 
 ## Production and Vercel

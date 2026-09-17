@@ -7,7 +7,7 @@ import { Slider } from "@/components/ui/slider";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { BLANKET_GEOMETRY_ADAPTER } from "@/lib/blanket-geometry";
 import { mockTwinState } from "@/lib/mock-twin-state";
-import { MODULE_LAYOUT_V1 } from "@/lib/module-layout";
+import { MODULE_LAYOUT_V1, moduleAxisBounds, moduleCellTranslationMm, moduleCellsIntersectingSlice } from "@/lib/module-layout";
 import { MAX_SCIENTIFIC_SLICES, useTwinStore } from "@/lib/twin-store";
 import type { ScientificFieldId, ScientificSlice, SliceAxis, ViewScale, VisualizationMode } from "@/lib/twin-types";
 import { axisBoundaries } from "@/lib/scientific-field";
@@ -279,9 +279,9 @@ function ModuleScientificNotice() {
   return (
     <div className="panel-section module-scientific-notice" data-testid="module-scientific-notice">
       <div className="section-label">SCIENTIFIC DISPLAY</div>
-      <Badge tone="muted">Unavailable</Badge>
-      <p>Module-scale MCNP field data is not available yet.</p>
-      <small>The loaded MCNP field remains a single-cell reference and is not repeated across the array. A future milestone may allow reference-field inspection on a selected cell.</small>
+      <Badge tone="cyan">Tiled preview</Badge>
+      <p>Tiled reference field</p>
+      <small>Single-cell reference MCNP field · Reference case: 107-E · repeated across module cells for visualization · not a module-scale MCNP simulation.</small>
     </div>
   );
 }
@@ -308,6 +308,7 @@ function ScientificSliceManager({
   onOpacity: (id: string, opacity: number) => void;
 }) {
   const scientificField = useTwinStore((state) => state.scientificField);
+  const viewScale = useTwinStore((state) => state.viewScale);
   return (
     <div className="panel-section scientific-slice-manager" data-testid="scientific-slice-manager">
       <div className="slice-manager-heading">
@@ -320,14 +321,16 @@ function ScientificSliceManager({
         </Button>
       </div>
       {slices.map((slice, index) => {
-        const bounds = scientificField ? axisBoundaries(scientificField.manifest, slice.axis) : [0, 921];
+        const bounds = scientificField ? (viewScale === "module" ? moduleAxisBounds(MODULE_LAYOUT_V1, slice.axis) : axisBoundaries(scientificField.manifest, slice.axis)) : [0, 921];
         const minimum = bounds[0];
         const maximum = bounds.at(-1)!;
+        const intersectedCellCount = viewScale === "module" ? moduleCellsIntersectingSlice(MODULE_LAYOUT_V1, slice.axis, slice.requestedPositionMm).length : null;
         return (
           <div className={`scientific-slice-row ${activeSliceId === slice.id ? "is-active" : ""}`} key={slice.id} data-testid={`scientific-slice-row-${slice.id}`}>
             <div className="scientific-slice-row-heading">
               <button type="button" className="scientific-slice-select" onClick={() => onSelect(slice.id)} aria-pressed={activeSliceId === slice.id} data-testid={`select-scientific-slice-${slice.id}`}>
                 <strong>Slice {index + 1}</strong>
+                <small>{viewScale === "module" ? `${slice.axis} · ${slice.requestedPositionMm.toFixed(1)} mm · ${intersectedCellCount} cells` : `${slice.axis} · ${slice.centerMm.toFixed(1)} mm`}</small>
                 <span>{slice.axis} · {slice.lowerBoundMm.toFixed(1)}–{slice.upperBoundMm.toFixed(1)} mm</span>
               </button>
               <label className="slice-visibility-control">
@@ -506,9 +509,12 @@ function NeutronicsControls() {
   const activeDisplayName = "display_name" in active ? active.display_name : active.displayName;
   const activeCategory = "quantity_type" in active ? active.quantity_type : active.category;
   const activeUnits = "display_units" in active ? active.display_units : active.units;
-  const currentBoundaries = scientificField ? axisBoundaries(scientificField.manifest, axis) : [0, 921];
+  const viewScale = useTwinStore((state) => state.viewScale);
+  const selectedCellId = useTwinStore((state) => state.selectedCellId);
+  const selectedCell = MODULE_LAYOUT_V1.cells.find((cell) => cell.cellId === selectedCellId) ?? null;
+  const currentBoundaries = scientificField ? (viewScale === "module" ? moduleAxisBounds(MODULE_LAYOUT_V1, axis) : axisBoundaries(scientificField.manifest, axis)) : [0, 921];
   const layerMetadata = activeSlice;
-  const sliceRange = scientificField && layerMetadata ? scientificField.manifest.fields[fieldId].slice_ranges[axis][layerMetadata.layerIndex] : null;
+  const sliceRange = scientificField && layerMetadata && viewScale === "single-cell" ? scientificField.manifest.fields[fieldId].slice_ranges[axis][layerMetadata.layerIndex] : null;
   const statusLabel = scientificStatus === "ready"
     ? "Reference MCNP field"
     : scientificStatus === "error"
@@ -526,12 +532,25 @@ function NeutronicsControls() {
       (y[0] + y[y.length - 1]) / 2,
       (z[0] + z[z.length - 1]) / 2,
     ];
-    point[activeSlice.axis === "X" ? 0 : activeSlice.axis === "Y" ? 1 : 2] = activeSlice.centerMm;
-    void probeVoxel(activeSlice.id, point);
+    const probeCell = viewScale === "module"
+      ? selectedCell ?? moduleCellsIntersectingSlice(MODULE_LAYOUT_V1, activeSlice.axis, activeSlice.requestedPositionMm)[0] ?? null
+      : null;
+    const translation = probeCell ? moduleCellTranslationMm(probeCell) : [0, 0, 0] as [number, number, number];
+    const axisIndex = activeSlice.axis === "X" ? 0 : activeSlice.axis === "Y" ? 1 : 2;
+    point[axisIndex] = activeSlice.requestedPositionMm - translation[axisIndex];
+    void probeVoxel(activeSlice.id, point, probeCell?.cellId, point[axisIndex]);
   };
 
   return (
     <>
+      {viewScale === "module" && selectedCell && (
+        <div className="panel-section module-reference-provenance" data-testid="module-reference-provenance">
+          <div className="section-label">SELECTED-CELL REFERENCE FIELD</div>
+          <Badge tone="cyan">Reference only</Badge>
+          <p><strong>Single-cell reference MCNP field</strong></p>
+          <small>Reference case: 107-E · repeated across module cells for visualization · not a module-scale simulation. Reference MCNP field remains fixed to case 107-E and may not correspond to the currently applied geometry.</small>
+        </div>
+      )}
       <div className="panel-section panel-section-first">
         <label className="section-label" htmlFor="field-selector">ACTIVE FIELD</label>
         <select
@@ -593,8 +612,8 @@ function NeutronicsControls() {
         <i />
       </label>
       <MetricRow label="Display state" value={`${mode} · ${slices.filter((slice) => slice.visible).length}/${slices.length} slices · ${displayScale}`} />
-      <MetricRow label={`Containing ${axis} layer`} value={layerMetadata ? `${layerMetadata.lowerBoundMm.toFixed(1)} – ${layerMetadata.upperBoundMm.toFixed(1)}` : "Unavailable"} unit={layerMetadata ? "mm" : undefined} />
-      <MetricRow label="Rendered at center" value={layerMetadata ? layerMetadata.centerMm.toFixed(1) : "Unavailable"} unit={layerMetadata ? "mm" : undefined} />
+      <MetricRow label={viewScale === "module" ? `Global ${axis} position` : `Containing ${axis} layer`} value={layerMetadata ? (viewScale === "module" ? layerMetadata.requestedPositionMm.toFixed(1) : `${layerMetadata.lowerBoundMm.toFixed(1)} – ${layerMetadata.upperBoundMm.toFixed(1)}`) : "Unavailable"} unit={layerMetadata ? "mm" : undefined} />
+      <MetricRow label={viewScale === "module" ? "Reference local layer center" : "Rendered at center"} value={layerMetadata ? layerMetadata.centerMm.toFixed(1) : "Unavailable"} unit={layerMetadata ? "mm" : undefined} />
       <MetricRow label="Global range" value={scientificField ? `${scientificField.manifest.fields[fieldId].web_range[0].toExponential(3)} – ${scientificField.manifest.fields[fieldId].web_range[1].toExponential(3)}` : "Unavailable"} unit={scientificField ? scientificField.manifest.fields[fieldId].display_units : undefined} />
       <MetricRow label="Slice range" value={sliceRange ? `${sliceRange[0].toExponential(3)} – ${sliceRange[1].toExponential(3)}` : "Unavailable"} unit={sliceRange ? scientificField?.manifest.fields[fieldId].display_units : undefined} />
       <MetricRow label="Scientific field" value={statusLabel} />
@@ -609,10 +628,13 @@ function NeutronicsControls() {
               <Button variant="ghost" size="sm" onClick={clearProbe} data-testid="clear-probe">Clear</Button>
             </div>
             <MetricRow label="Slice" value={`${probe.sliceLabel} · ${probe.sliceAxis}`} />
-            <MetricRow label="X interval" value={`${probe.boundsMm.x[0].toFixed(1)} – ${probe.boundsMm.x[1].toFixed(1)}`} unit="mm" />
-            <MetricRow label="Y interval" value={`${probe.boundsMm.y[0].toFixed(1)} – ${probe.boundsMm.y[1].toFixed(1)}`} unit="mm" />
-            <MetricRow label="Z interval" value={`${probe.boundsMm.z[0].toFixed(1)} – ${probe.boundsMm.z[1].toFixed(1)}`} unit="mm" />
-            <MetricRow label="Cell center" value={probe.centerMm.map((value) => value.toFixed(1)).join(", ")} unit="mm" />
+            {probe.moduleCell && <MetricRow label="Module cell" value={`${probe.moduleCell.cellId} · row ${probe.moduleCell.row} · column ${probe.moduleCell.column} · q ${probe.moduleCell.q} · r ${probe.moduleCell.r}`} />}
+            {probe.moduleCell && <MetricRow label="Reference case" value="107-E" />}
+            <MetricRow label={probe.moduleCell ? "Local X interval" : "X interval"} value={`${probe.boundsMm.x[0].toFixed(1)} – ${probe.boundsMm.x[1].toFixed(1)}`} unit="mm" />
+            <MetricRow label={probe.moduleCell ? "Local Y interval" : "Y interval"} value={`${probe.boundsMm.y[0].toFixed(1)} – ${probe.boundsMm.y[1].toFixed(1)}`} unit="mm" />
+            <MetricRow label={probe.moduleCell ? "Local Z interval" : "Z interval"} value={`${probe.boundsMm.z[0].toFixed(1)} – ${probe.boundsMm.z[1].toFixed(1)}`} unit="mm" />
+            <MetricRow label={probe.moduleCell ? "Local center" : "Cell center"} value={probe.centerMm.map((value) => value.toFixed(1)).join(", ")} unit="mm" />
+            {probe.moduleCenterMm && <MetricRow label="Module center" value={probe.moduleCenterMm.map((value) => value.toFixed(1)).join(", ")} unit="mm" />}
             <div className="probe-subheading">PHYSICAL QUANTITIES</div>
             {scientificField?.manifest.field_order.map((id) => (
               <MetricRow key={id} label={scientificField.manifest.fields[id].display_name} value={probe.values[id].toExponential(4)} unit={scientificField.manifest.fields[id].display_units} />
@@ -695,13 +717,13 @@ export function ControlPanel() {
         <ScaleModeControls />
         {section === "overview" && <OverviewControls />}
         {section === "design" && <DesignControls />}
+        {section === "neutronics" && viewScale === "module" && <ModuleScientificNotice />}
         {section === "neutronics" && <NeutronicsControls />}
         {section === "thermal-hydraulics" && <ThermalControls />}
         {section === "performance" && <PerformanceControls />}
         {section !== "thermal-hydraulics" && <ComponentDisplayControls />}
         {section !== "thermal-hydraulics" && <GeometrySectionControls />}
-        {section === "neutronics" && viewScale === "single-cell" && <ScientificDisplayControls />}
-        {section === "neutronics" && viewScale === "module" && <ModuleScientificNotice />}
+        {section === "neutronics" && <ScientificDisplayControls />}
       </div>
     </aside>
   );

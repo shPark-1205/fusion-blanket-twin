@@ -1,4 +1,5 @@
 import { BLANKET_GEOMETRY_ADAPTER } from "./blanket-geometry";
+import type { SliceAxis } from "./twin-types";
 
 export type BoundsMm = [number, number, number, number, number, number];
 
@@ -35,6 +36,34 @@ export interface ModuleLayout {
     boundsMm: BoundsMm;
   };
   pitchDefinition: ModulePitchDefinition;
+}
+
+/** Translation applied to the existing local single-cell geometry in scene millimetres. */
+export function moduleCellTranslationMm(cell: ModuleCellInstance): [number, number, number] {
+  // The canonical cell already carries the full Z extent from plasma-facing Z=0;
+  // module placement is transverse only, matching the renderer's instance transform.
+  return [cell.positionMm.x, cell.positionMm.y, 0];
+}
+
+export function moduleAxisBounds(layout: ModuleLayout, axis: SliceAxis): [number, number] {
+  const index = axis === "X" ? 0 : axis === "Y" ? 2 : 4;
+  return [layout.boundsMm[index], layout.boundsMm[index + 1]];
+}
+
+export function moduleLocalSlicePositionMm(cell: ModuleCellInstance, axis: SliceAxis, globalPositionMm: number): number {
+  const translation = moduleCellTranslationMm(cell);
+  return globalPositionMm - translation[axis === "X" ? 0 : axis === "Y" ? 1 : 2];
+}
+
+export function moduleCellsIntersectingSlice(layout: ModuleLayout, axis: SliceAxis, globalPositionMm: number): ModuleCellInstance[] {
+  const boundsIndex = axis === "X" ? 0 : axis === "Y" ? 2 : 4;
+  const minimum = layout.sourceCellGeometry.boundsMm[boundsIndex];
+  const maximum = layout.sourceCellGeometry.boundsMm[boundsIndex + 1];
+  return layout.cells.filter((cell) => {
+    if (!cell.enabled) return false;
+    const localPosition = moduleLocalSlicePositionMm(cell, axis, globalPositionMm);
+    return localPosition >= minimum && localPosition <= maximum;
+  });
 }
 
 /** Seven transverse lanes; the three former fifth-column cells are intentionally absent. */

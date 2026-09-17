@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { BLANKET_GEOMETRY_ADAPTER } from "@/lib/blanket-geometry";
-import { MODULE_LAYOUT_V1 } from "@/lib/module-layout";
+import { MODULE_LAYOUT_V1, moduleCellTranslationMm, moduleCellsIntersectingSlice } from "@/lib/module-layout";
 import { mockTwinState } from "@/lib/mock-twin-state";
 import { useTwinStore } from "@/lib/twin-store";
 import { SCIENTIFIC_COLOR_GRADIENT, scalarDomain } from "@/lib/scientific-field";
@@ -52,6 +52,11 @@ export function BlanketViewport() {
   const scientificField = useTwinStore((state) => state.scientificField);
   const scientificError = useTwinStore((state) => state.scientificFieldError);
   const scientificMetrics = useTwinStore((state) => state.scientificLoadMetrics);
+  const selectedModuleCell = viewScale === "module"
+    ? MODULE_LAYOUT_V1.cells.find((cell) => cell.cellId === selectedCellId) ?? null
+    : null;
+  const referenceFieldVisible = true;
+  const selectedModuleTranslation = selectedModuleCell ? moduleCellTranslationMm(selectedModuleCell) : [0, 0, 0] as [number, number, number];
   const field = scientificField?.manifest.fields[fieldId] ?? mockTwinState.fields.find((item) => item.id === fieldId)!;
   const fieldDisplayName = "display_name" in field ? field.display_name : field.displayName;
   const neutronics = section === "neutronics";
@@ -163,14 +168,14 @@ export function BlanketViewport() {
             <Box size={24} /><strong>Blanket geometry asset unavailable</strong><small>{geometryError}</small><code>public/models/blanket_unit_cell.glb</code>
           </div>
         )}
-        {viewScale === "single-cell" && neutronics && scientificStatus !== "ready" && scientificStatus !== "error" && (
+        {referenceFieldVisible && neutronics && scientificStatus !== "ready" && scientificStatus !== "error" && (
           <div className="scientific-load-state" role="status" data-testid="scientific-loading">
             <span className="geometry-spinner" />
             <strong>{scientificStatus === "loading-scalars" ? "Loading scalar array" : scientificStatus === "loading-geometry" ? "Validating scientific geometry" : "Loading scientific metadata"}</strong>
             <small>Reference MCNP simulation · {fieldDisplayName}</small>
           </div>
         )}
-        {viewScale === "single-cell" && neutronics && scientificStatus === "error" && (
+        {referenceFieldVisible && neutronics && scientificStatus === "error" && (
           <div className="scientific-load-state scientific-error" role="alert" data-testid="scientific-error">
             <AlertTriangle size={20} />
             <strong>Scientific field asset unavailable</strong>
@@ -178,8 +183,8 @@ export function BlanketViewport() {
             <span>CAD and scalar Twin API remain independent.</span>
           </div>
         )}
-        {viewScale === "single-cell" && neutronics && scientificStatus === "ready" && mode === "Slice" && scientificField && activeRecord && scalarTicks && (
-          <div className="scientific-scalar-bar" data-testid="scientific-scalar-bar">
+        {referenceFieldVisible && neutronics && scientificStatus === "ready" && mode === "Slice" && scientificField && activeRecord && scalarTicks && (
+          <div className="scientific-scalar-bar" data-testid="scientific-scalar-bar" data-reference-scope={viewScale === "module" ? "selected-cell-reference" : "single-cell"} data-reference-cell-id={selectedModuleCell?.cellId ?? "single-cell"}>
             <div className="scalar-bar-heading"><strong>{activeRecord.display_name}</strong><span>{activeRecord.display_units} · {scaleLabel}</span></div>
             <div className="scalar-bar-body">
               <div className="scalar-gradient" style={{ background: SCIENTIFIC_COLOR_GRADIENT }} />
@@ -188,8 +193,9 @@ export function BlanketViewport() {
               </div>
             </div>
             <div className="scalar-zero-key"><span>Zero / nonpositive cells hidden</span></div>
-            <small>{scientificLayer ? `${axis} layer ${scientificLayer.lowerBoundMm.toFixed(1)}–${scientificLayer.upperBoundMm.toFixed(1)} mm · center ${scientificLayer.centerMm.toFixed(1)} mm` : `${scaleLabel} · raw cell values`}</small>
+            <small>{scientificLayer ? (viewScale === "module" ? `${axis} global module position ${scientificLayer.requestedPositionMm.toFixed(1)} mm` : `${axis} layer ${scientificLayer.lowerBoundMm.toFixed(1)}–${scientificLayer.upperBoundMm.toFixed(1)} mm · center ${scientificLayer.centerMm.toFixed(1)} mm`) : `${scaleLabel} · raw cell values`}</small>
             <small>{scientificSlices.filter((slice) => slice.visible).length} visible slice{scientificSlices.filter((slice) => slice.visible).length === 1 ? "" : "s"} · raw cell values</small>
+            {viewScale === "module" && <small>Single-cell reference MCNP · case 107-E · repeated across module cells for visualization · not module-scale</small>}
             {log && <small>Positive range starts at {activeRecord.positive_minimum?.toExponential(2)}</small>}
           </div>
         )}
@@ -227,10 +233,13 @@ export function BlanketViewport() {
           ))}
         </div>
       )}
-      {viewScale === "single-cell" && scientificField && scientificStatus === "ready" && (
+      {referenceFieldVisible && scientificField && scientificStatus === "ready" && (
         <div
           className="geometry-diagnostics"
           data-testid="scientific-field-ready"
+          data-reference-scope={viewScale === "module" ? "tiled-reference-preview" : "single-cell"}
+          data-reference-cell-id={selectedModuleCell?.cellId ?? (viewScale === "module" ? "module-array" : "single-cell")}
+          data-module-translation-mm={viewScale === "module" ? "module-global" : selectedModuleTranslation.join(",")}
           data-cell-count={scientificField.manifest.mesh.cell_count}
           data-active-field={fieldId}
           data-slice-axis={axis}
@@ -254,12 +263,17 @@ export function BlanketViewport() {
           data-scalar-parse-ms={scientificMetrics?.scalarParseMs?.toFixed(1) ?? "unknown"}
           data-render-ms={scientificMetrics?.firstRenderMs?.toFixed(1) ?? "unknown"}
           data-slice-update-ms={scientificMetrics?.sliceUpdateMs?.toFixed(1) ?? "unknown"}
+          data-scientific-renderer-mounted="true"
+          data-rendered-slice-count={scientificMetrics?.renderedSliceCount?.toString() ?? "unknown"}
+          data-rendered-vertex-count={scientificMetrics?.renderedVertexCount?.toString() ?? "unknown"}
+          data-rendered-patch-count={scientificMetrics?.renderedPatchCount?.toString() ?? "unknown"}
+          data-scientific-overlay={viewScale === "module" ? "true" : "false"}
           data-field-switch-ms={scientificMetrics?.fieldSwitchMs?.toFixed(1) ?? "unknown"}
           data-probe-ms={scientificMetrics?.probeMs?.toFixed(1) ?? "unknown"}
           data-scalar-domain={activeRecord ? scalarDomain(activeRecord, log ? "log" : "linear").join(",") : "unknown"}
         />
       )}
-      {viewScale === "single-cell" && scientificField && scientificStatus === "ready" && scientificSlices.map((slice) => (
+      {referenceFieldVisible && scientificField && scientificStatus === "ready" && scientificSlices.map((slice) => (
         <span
           key={slice.id}
           className="geometry-diagnostics"
@@ -269,6 +283,13 @@ export function BlanketViewport() {
           data-slice-layer={slice.layerIndex}
           data-slice-center-mm={slice.centerMm.toFixed(2)}
           data-slice-bounds-mm={`${slice.lowerBoundMm},${slice.upperBoundMm}`}
+          data-reference-cell-id={selectedModuleCell?.cellId ?? (viewScale === "module" ? "module-array" : "single-cell")}
+          data-module-translation-mm={viewScale === "module" ? "module-global" : selectedModuleTranslation.join(",")}
+          data-scientific-overlay={viewScale === "module" ? "true" : "false"}
+          data-scientific-renderer-mounted="true"
+          data-slice-geometry-nonempty={scientificMetrics?.renderedVertexCount && scientificMetrics.renderedVertexCount > 0 ? "true" : "false"}
+          data-global-slice-position-mm={slice.requestedPositionMm.toFixed(2)}
+          data-intersected-cell-count={viewScale === "module" ? moduleCellsIntersectingSlice(MODULE_LAYOUT_V1, slice.axis, slice.requestedPositionMm).length : "1"}
           data-slice-visible={slice.visible}
           data-slice-opacity={slice.opacity}
         />

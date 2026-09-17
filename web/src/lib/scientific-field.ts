@@ -135,6 +135,14 @@ export interface ScientificVoxelProbe {
   indices: { i: number; j: number; k: number };
   boundsMm: { x: [number, number]; y: [number, number]; z: [number, number] };
   centerMm: [number, number, number];
+  moduleCell?: {
+    cellId: string;
+    row: number;
+    column: number;
+    q: number;
+    r: number;
+  };
+  moduleCenterMm?: [number, number, number];
   values: Record<ScientificFieldId, number>;
   nuclearHeatingConsistency: {
     neutronPlusPhoton: number;
@@ -152,6 +160,9 @@ export interface ScientificLoadMetrics {
   sliceUpdateMs: number | null;
   fieldSwitchMs: number | null;
   probeMs: number | null;
+  renderedSliceCount?: number;
+  renderedVertexCount?: number;
+  renderedPatchCount?: number;
 }
 
 const loadedFields = new Map<ScientificFieldId, Promise<{ values: Float32Array; metrics: { downloadMs: number; parseMs: number } }>>();
@@ -369,6 +380,14 @@ export function buildVoxelProbe(
   sliceId = "slice-1",
   sliceAxis: SliceAxis = "Z",
   sliceLabel = sliceId,
+  moduleContext?: {
+    cellId: string;
+    row: number;
+    column: number;
+    q: number;
+    r: number;
+    translationMm: [number, number, number];
+  },
 ): ScientificVoxelProbe {
   const x = manifest.mesh.axis_boundaries_mm.x;
   const y = manifest.mesh.axis_boundaries_mm.y;
@@ -380,6 +399,11 @@ export function buildVoxelProbe(
     return [fieldId, fieldValues[linear]];
   })) as Record<ScientificFieldId, number>;
   const neutronPlusPhoton = values.neutron_heating + values.photon_heating;
+  const centerMm: [number, number, number] = [
+    (x[indices.i] + x[indices.i + 1]) / 2,
+    (y[indices.j] + y[indices.j + 1]) / 2,
+    (z[indices.k] + z[indices.k + 1]) / 2,
+  ];
   return {
     sliceId,
     sliceAxis,
@@ -390,11 +414,21 @@ export function buildVoxelProbe(
       y: [y[indices.j], y[indices.j + 1]],
       z: [z[indices.k], z[indices.k + 1]],
     },
-    centerMm: [
-      (x[indices.i] + x[indices.i + 1]) / 2,
-      (y[indices.j] + y[indices.j + 1]) / 2,
-      (z[indices.k] + z[indices.k + 1]) / 2,
-    ],
+    centerMm,
+    ...(moduleContext ? {
+      moduleCell: {
+        cellId: moduleContext.cellId,
+        row: moduleContext.row,
+        column: moduleContext.column,
+        q: moduleContext.q,
+        r: moduleContext.r,
+      },
+      moduleCenterMm: [
+        centerMm[0] + moduleContext.translationMm[0],
+        centerMm[1] + moduleContext.translationMm[1],
+        centerMm[2] + moduleContext.translationMm[2],
+      ] as [number, number, number],
+    } : {}),
     values,
     nuclearHeatingConsistency: {
       neutronPlusPhoton,
