@@ -81,6 +81,8 @@ The startup GLB at `public/models/blanket_unit_cell.glb` is a fixed presentation
 - PZ/CZ controls remain pending until Apply Design. Apply Design requests both scalar KPIs and current-family parametric CSG geometry from Python. If that geometry request is unavailable, the fixed representative GLB remains the presentation fallback.
 - Neutron Flux, Photon Flux, Neutron Heating, Photon Heating, Total Nuclear Heating, X/Y/Z raw-cell slices, Linear, and Log controls operate on actual MCNP cell data. The Neutronics slice manager supports up to six simultaneous, independently positioned slices, including multiple slices on one axis. Iso-surface remains disabled.
 - The viewport uses real GLB presentation geometry with orbit, zoom, pan, picking, Reset Camera, Fit Assembly, and fullscreen behavior.
+- View scale defaults to Single Cell. Module Layout V1 adds a geometry-only 28-cell flat-top hexagonal array with stable `R01-C01` cell IDs, fixed pitch derived from the canonical unit-cell outer RAFM bounds, module bounds, cell selection, and a hex occupancy map derived from the same lattice coordinates. The module reuses one loaded single-cell component tree with translated instances; it does not request one geometry response per cell. R02-C05, R04-C05, and R06-C05 are intentionally absent from the occupancy definition.
+- Module Layout V1 deliberately defers the external module RAFM envelope, rear manifold, coolant routing, module MCNP/CFX fields, and independent per-cell designs. All cells use one shared PZ/CZ design and the same component visibility and opacity controls.
 - Geometry Section View applies a single Three.js clipping plane to the currently displayed CAD source (parametric CSG or GLB fallback). The position range follows that source's millimetre bounds. An amber visual cut-plane marker makes the section location explicit; it is a visual inspection aid rather than an exact material-filled cap, and clipped surfaces remain open because generated cap faces are deferred.
 - Semantic selection, visibility, and opacity update the already-loaded scene without reloading the GLB.
 - Every displayed slice uses raw containing-voxel cell values without point interpolation. All configured slices share one cached field array, scalar range, scale mode, and colormap. Their Float32 values are documented visualization copies; the Float64 VTKHDF remains authoritative. Log display is visualization-only; zero and nonpositive cells are hidden while raw values remain unchanged.
@@ -88,6 +90,7 @@ The startup GLB at `public/models/blanket_unit_cell.glb` is a fixed presentation
 - The loaded field is one fixed reference MCNP simulation. It never follows PZ/CZ scalar-surrogate design changes and is labeled accordingly.
 - The parametric CSG web mesh is functional inspection geometry but remains somewhat faceted/STL-like; presentation-grade boundary-mesh cleanup is deferred.
 - Thermal-hydraulics is an explicitly unavailable workspace; no CFX data source is connected.
+- Scientific slices and probes remain available only in Single Cell mode. Module mode clearly reports `Module-scale MCNP field data is not available yet.` and does not repeat the representative single-cell MCNP field across the array.
 - Illustrative plots are static and do not expose invented scientific values through hover interactions.
 
 ## Production and Vercel

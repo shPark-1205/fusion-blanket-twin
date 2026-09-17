@@ -625,6 +625,98 @@ test("geometry section interactions preserve page and canvas layout", async ({ p
   await expect(page.getByTestId("geometry-ready")).toHaveAttribute("data-camera-position", cameraBefore ?? "");
 });
 
+test("module assembly keeps single-cell defaults and exposes fixed hex layout controls", async ({ page }) => {
+  const consoleErrors: string[] = [];
+  const pageErrors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") consoleErrors.push(message.text());
+  });
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await page.goto("/");
+  await expect(page.getByTestId("geometry-ready")).toBeAttached({ timeout: 15_000 });
+
+  await expect(page.getByTestId("view-scale-single-cell")).toHaveAttribute("data-state", "on");
+  await expect(page.getByTestId("geometry-ready")).toHaveAttribute("data-view-scale", "single-cell");
+  await expect(page.getByTestId("geometry-ready")).toHaveAttribute("data-module-cell-count", "1");
+  await expect(page.getByRole("heading", { name: "Blanket Unit Cell" })).toBeVisible();
+  await expect(page.getByTestId("scientific-field-ready")).toBeAttached({ timeout: 15_000 });
+
+  const switchStarted = await page.evaluate(() => performance.now());
+  await page.getByTestId("view-scale-module").click();
+  await expect(page.getByTestId("geometry-ready")).toHaveAttribute("data-view-scale", "module");
+  const switchMs = (await page.evaluate(() => performance.now())) - switchStarted;
+  await expect(page.getByRole("heading", { name: "Blanket Module" })).toBeVisible();
+  await expect(page.getByTestId("module-layout-summary")).toContainText("28 cells");
+  await expect(page.getByTestId("geometry-ready")).toHaveAttribute("data-module-layout-id", "module-layout-v1");
+  await expect(page.getByTestId("geometry-ready")).toHaveAttribute("data-module-cell-count", "28");
+  await expect(page.getByTestId("geometry-ready")).toHaveAttribute("data-component-count", "728");
+  await expect(page.getByTestId("module-pitch-definition")).toContainText("Fixed pitch X 108.25 mm · Y 125.00 mm");
+  await expect(page.getByTestId("scientific-field-ready")).toHaveCount(0);
+  await expect(page.getByTestId("scientific-scalar-bar")).toHaveCount(0);
+  expect(await page.getByTestId("module-cell-R01-C01").count()).toBe(1);
+  expect(await page.getByTestId("module-cell-R02-C05").count()).toBe(0);
+  expect(await page.getByTestId("module-cell-R04-C05").count()).toBe(0);
+  expect(await page.getByTestId("module-cell-R06-C05").count()).toBe(0);
+  expect(await page.getByTestId("module-cell-R07-C04").count()).toBe(1);
+  const occupancyTiles = page.locator("[aria-label='Module cell occupancy'] button");
+  await expect(occupancyTiles).toHaveCount(28);
+  const tilePositions = await occupancyTiles.evaluateAll((buttons) => buttons.map((button) => `${button.getAttribute("style")}`));
+  expect(new Set(tilePositions).size).toBe(28);
+  const firstRowTop = await page.getByTestId("module-cell-R01-C01").evaluate((button) => (button as HTMLElement).style.top);
+  const staggeredRowTop = await page.getByTestId("module-cell-R02-C01").evaluate((button) => (button as HTMLElement).style.top);
+  expect(firstRowTop).not.toBe(staggeredRowTop);
+
+  await page.getByTestId("module-cell-R02-C04").click();
+  await expect(page.getByTestId("selected-cell-info")).toContainText("R02-C04");
+  await expect(page.getByTestId("rail-selected-cell-id")).toHaveText("R02-C04");
+  await expect(page.getByTestId("geometry-ready")).toHaveAttribute("data-selected-cell-id", "R02-C04");
+
+  await page.getByTestId("visibility-coolant").click();
+  await expect(page.getByTestId("geometry-group-coolant")).toHaveAttribute("data-visible", "false");
+  await page.getByTestId("opacity-slider-breeder").press("Home");
+  await expect(page.getByTestId("opacity-breeder")).toHaveText("15%");
+
+  await page.getByTestId("nav-neutronics").click();
+  await expect(page.getByTestId("module-scientific-notice")).toContainText("Module-scale MCNP field data is not available yet.");
+  await expect(page.getByTestId("scientific-scalar-bar")).toHaveCount(0);
+  await page.getByTestId("view-scale-single-cell").click();
+  await expect(page.getByTestId("geometry-ready")).toHaveAttribute("data-view-scale", "single-cell");
+  await expect(page.getByTestId("scientific-field-ready")).toBeAttached({ timeout: 15_000 });
+  await expect(page.getByTestId("scientific-scalar-bar")).toBeVisible();
+
+  await page.getByTestId("view-scale-module").click();
+  await page.getByTestId("section-axis-x").click();
+  const moduleBounds = (await page.getByTestId("geometry-ready").getAttribute("data-module-bounds-mm"))!.split(",").map(Number);
+  const sectionSlider = page.getByRole("slider", { name: "Section position" });
+  expect(Number(await sectionSlider.getAttribute("aria-valuemin"))).toBeCloseTo(moduleBounds[0], 2);
+  expect(Number(await sectionSlider.getAttribute("aria-valuemax"))).toBeCloseTo(moduleBounds[1], 2);
+  await page.getByTestId("section-view-toggle").check();
+  await expect(page.getByTestId("geometry-ready")).toHaveAttribute("data-clipping-plane-count", "1");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0);
+  expect(switchMs).toBeLessThan(2_000);
+  expect(consoleErrors, `browser console errors:\n${consoleErrors.join("\n")}`).toEqual([]);
+  expect(pageErrors, `uncaught page errors:\n${pageErrors.join("\n")}`).toEqual([]);
+});
+
+test("module Apply Design updates shared geometry with one geometry request", async ({ page }) => {
+  let geometryRequests = 0;
+  await page.on("request", (request) => {
+    if (request.url().includes("/api/geometry/design") && request.method() === "POST") geometryRequests += 1;
+  });
+  await page.goto("/");
+  await expect(page.getByTestId("geometry-ready")).toBeAttached({ timeout: 15_000 });
+  geometryRequests = 0;
+  await page.getByTestId("view-scale-module").click();
+  await page.getByTestId("nav-design").click();
+  await page.getByRole("slider", { name: "PZ 206" }).press("Home");
+  await page.getByTestId("apply-design").click();
+  await expect(page.getByTestId("prediction-status")).toContainText("Predicted · PZ 2.60");
+  await expect(page.getByTestId("geometry-ready")).toHaveAttribute("data-view-scale", "module");
+  expect(geometryRequests).toBe(1);
+  await expect(page.getByTestId("geometry-ready")).toHaveAttribute("data-module-cell-count", "28");
+});
+
 test("the engineering workspace remains readable and unclipped at target desktop resolutions", async ({ page }) => {
   const resolutions = [
     { width: 1366, height: 768 },

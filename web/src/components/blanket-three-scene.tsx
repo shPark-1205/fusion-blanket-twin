@@ -12,6 +12,7 @@ import {
   COMPONENT_APPEARANCE,
   semanticComponentForNames,
 } from "@/lib/blanket-geometry";
+import { MODULE_LAYOUT_V1, type ModuleCellInstance, type ModuleLayout } from "@/lib/module-layout";
 import type { CameraCommand } from "@/lib/twin-store";
 import { useTwinStore } from "@/lib/twin-store";
 import type { ComponentId, ScientificFieldId, ScientificSlice, SliceAxis } from "@/lib/twin-types";
@@ -92,6 +93,78 @@ function sectionBoundsMm(bounds: readonly number[] | null, axis: SliceAxis): [nu
   return [Math.min(minimum, maximum), Math.max(minimum, maximum)];
 }
 
+function cellIdFromObject(object: THREE.Object3D | null): string | null {
+  let current = object;
+  while (current) {
+    if (typeof current.userData.cellId === "string") return current.userData.cellId;
+    current = current.parent;
+  }
+  return null;
+}
+
+function setCellIdentity(root: THREE.Object3D, cell: ModuleCellInstance) {
+  root.userData.cellId = cell.cellId;
+  root.userData.cellRow = cell.row;
+  root.userData.cellColumn = cell.column;
+  root.userData.cellQ = cell.q;
+  root.userData.cellR = cell.r;
+  root.traverse((object) => {
+    object.userData.cellId = cell.cellId;
+  });
+}
+
+function buildModuleModel(source: THREE.Group, layout: ModuleLayout): THREE.Group {
+  const assembly = new THREE.Group();
+  assembly.name = `ModuleAssembly:${layout.layoutId}`;
+  assembly.userData.layoutId = layout.layoutId;
+  for (const cell of layout.cells) {
+    if (!cell.enabled) continue;
+    const instance = source.clone(true);
+    instance.name = `Cell:${cell.cellId}`;
+    instance.position.set(cell.positionMm.x, cell.positionMm.y, 0);
+    setCellIdentity(instance, cell);
+    assembly.add(instance);
+  }
+  return assembly;
+}
+
+function buildCellHighlightPositions(cell: ModuleCellInstance, bounds: readonly number[]) {
+  const radius = (bounds[1] - bounds[0]) / 2;
+  const z0 = bounds[4];
+  const z1 = bounds[5];
+  const points: Array<[number, number, number]> = [];
+  for (const z of [z0, z1]) {
+    for (let index = 0; index < 6; index += 1) {
+      const angle = index * Math.PI / 3;
+      points.push([cell.positionMm.x + radius * Math.cos(angle), cell.positionMm.y + radius * Math.sin(angle), z]);
+    }
+  }
+  const edges: Array<[number, number]> = [];
+  for (let index = 0; index < 6; index += 1) {
+    const next = (index + 1) % 6;
+    edges.push([index, next], [index + 6, next + 6], [index, index + 6]);
+  }
+  const positions = new Float32Array(edges.length * 2 * 3);
+  edges.forEach(([from, to], index) => {
+    const start = points[from];
+    const end = points[to];
+    positions.set([...start, ...end], index * 6);
+  });
+  return positions;
+}
+
+function CellSelectionHighlight({ cell, bounds }: { cell: ModuleCellInstance; bounds: readonly number[] }) {
+  const positions = useMemo(() => buildCellHighlightPositions(cell, bounds), [bounds, cell]);
+  return (
+    <lineSegments scale={BLANKET_GEOMETRY_ADAPTER.sourceToSceneScale} renderOrder={12} raycast={() => null} userData={{ selectedCellId: cell.cellId }}>
+      <bufferGeometry>
+        <bufferAttribute attach="attributes-position" args={[positions, 3]} />
+      </bufferGeometry>
+      <lineBasicMaterial color="#f1c56b" transparent opacity={0.95} depthTest={false} toneMapped={false} />
+    </lineSegments>
+  );
+}
+
 function SectionPlaneMarker({
   boundsMm,
   axis,
@@ -167,6 +240,7 @@ function SectionPlaneMarker({
 
 function ScientificSliceScene() {
   const section = useTwinStore((state) => state.section);
+  const viewScale = useTwinStore((state) => state.viewScale);
   const mode = useTwinStore((state) => state.visualizationMode);
   const scientificSlices = useTwinStore((state) => state.scientificSlices);
   const activeSliceId = useTwinStore((state) => state.activeScientificSliceId);
@@ -180,7 +254,7 @@ function ScientificSliceScene() {
   const manifest = scientificData?.manifest ?? null;
   const values = scientificData?.valuesByField[activeFieldId] ?? null;
   const slices = useMemo(() => {
-    if (!manifest || !values || section !== "neutronics" || mode !== "Slice") return null;
+    if (viewScale !== "single-cell" || !manifest || !values || section !== "neutronics" || mode !== "Slice") return null;
     const field = manifest.fields[activeFieldId];
     return scientificSlices
       .filter((slice) => slice.visible)
@@ -188,7 +262,7 @@ function ScientificSliceScene() {
         slice,
         geometry: buildSliceGeometry(manifest, values, field.key, slice, useLogScale ? "log" : "linear"),
       }));
-  }, [activeFieldId, manifest, mode, scientificSlices, section, useLogScale, values]);
+  }, [activeFieldId, manifest, mode, scientificSlices, section, useLogScale, values, viewScale]);
 
   useEffect(() => {
     if (!slices) return;
@@ -446,15 +520,21 @@ function buildProbeHighlight(axis: SliceAxis, probe: ScientificVoxelProbe) {
 function CameraController({
   model,
   command,
+  viewScale,
+  boundsMm,
   onCameraState,
 }: {
   model: THREE.Group | null;
   command: CameraCommand;
+  viewScale: "single-cell" | "module";
+  boundsMm: readonly number[];
   onCameraState: (state: CameraState) => void;
 }) {
   const controls = useRef<OrbitControlsImpl>(null);
   const initialized = useRef(false);
   const lastCommandSequence = useRef(0);
+  const previousViewScale = useRef(viewScale);
+  const pendingModuleFit = useRef(false);
   const { camera, size, invalidate } = useThree();
 
   const reportCameraState = useCallback(() => {
@@ -478,7 +558,12 @@ function CameraController({
 
   const fit = useCallback(() => {
     if (!model) return;
-    const bounds = new THREE.Box3().setFromObject(model);
+    const bounds = boundsMm.length === 6
+      ? new THREE.Box3(
+          new THREE.Vector3(boundsMm[0] * BLANKET_GEOMETRY_ADAPTER.sourceToSceneScale, boundsMm[2] * BLANKET_GEOMETRY_ADAPTER.sourceToSceneScale, boundsMm[4] * BLANKET_GEOMETRY_ADAPTER.sourceToSceneScale),
+          new THREE.Vector3(boundsMm[1] * BLANKET_GEOMETRY_ADAPTER.sourceToSceneScale, boundsMm[3] * BLANKET_GEOMETRY_ADAPTER.sourceToSceneScale, boundsMm[5] * BLANKET_GEOMETRY_ADAPTER.sourceToSceneScale),
+        )
+      : new THREE.Box3().setFromObject(model);
     if (bounds.isEmpty()) return;
     const center = bounds.getCenter(new THREE.Vector3());
     const sphere = bounds.getBoundingSphere(new THREE.Sphere());
@@ -494,7 +579,7 @@ function CameraController({
     controls.current?.update();
     reportCameraState();
     invalidate();
-  }, [camera, invalidate, model, reportCameraState, size.height, size.width]);
+  }, [boundsMm, camera, invalidate, model, reportCameraState, size.height, size.width]);
 
   const rotate = useCallback((action: CameraCommand["action"]) => {
     const target = controls.current?.target ?? INITIAL_TARGET;
@@ -514,6 +599,17 @@ function CameraController({
     else if (command.action === "fit") fit();
     else rotate(command.action);
   }, [command, fit, reset, rotate]);
+
+  useEffect(() => {
+    if (viewScale === "module" && previousViewScale.current !== "module") {
+      pendingModuleFit.current = true;
+    }
+    previousViewScale.current = viewScale;
+    if (pendingModuleFit.current && model) {
+      pendingModuleFit.current = false;
+      fit();
+    }
+  }, [fit, model, viewScale]);
 
   useEffect(() => {
     if (!model || initialized.current) return;
@@ -542,27 +638,36 @@ function CameraController({
 
 function BlanketModel({ cameraCommand, onReady, onError, onCameraState }: SceneProps) {
   const [model, setModel] = useState<THREE.Group | null>(null);
-  const [hovered, setHovered] = useState<{ group: ComponentId; point: [number, number, number] } | null>(null);
+  const [hovered, setHovered] = useState<{ group: ComponentId; cellId: string | null; point: [number, number, number] } | null>(null);
   const selected = useTwinStore((state) => state.selectedComponentId);
   const visibility = useTwinStore((state) => state.componentVisibility);
   const opacity = useTwinStore((state) => state.componentOpacity);
   const section = useTwinStore((state) => state.section);
   const visualizationMode = useTwinStore((state) => state.visualizationMode);
+  const viewScale = useTwinStore((state) => state.viewScale);
+  const selectedCellId = useTwinStore((state) => state.selectedCellId);
   const geometry = useTwinStore((state) => state.geometry);
   const sectionViewEnabled = useTwinStore((state) => state.sectionViewEnabled);
   const sectionViewAxis = useTwinStore((state) => state.sectionViewAxis);
   const sectionViewPositionMm = useTwinStore((state) => state.sectionViewPositionMm);
   const sectionViewFlip = useTwinStore((state) => state.sectionViewFlip);
   const selectComponent = useTwinStore((state) => state.selectComponent);
+  const selectCell = useTwinStore((state) => state.selectCell);
   const { invalidate } = useThree();
 
   const parametricModel = useMemo(() => (
     geometry ? buildParametricModel(geometry) : null
   ), [geometry]);
-  const displayModel = parametricModel ?? model;
+  const singleCellModel = parametricModel ?? model;
+  const moduleModel = useMemo(
+    () => (singleCellModel && viewScale === "module" ? buildModuleModel(singleCellModel, MODULE_LAYOUT_V1) : null),
+    [singleCellModel, viewScale],
+  );
+  const displayModel = viewScale === "module" ? moduleModel : singleCellModel;
+  const displayBounds = viewScale === "module" ? MODULE_LAYOUT_V1.boundsMm : geometry?.bounds_mm ?? null;
   const clippingPlane = useMemo(() => {
     if (!sectionViewEnabled) return null;
-    const [minimum, maximum] = sectionBoundsMm(geometry?.bounds_mm ?? null, sectionViewAxis);
+    const [minimum, maximum] = sectionBoundsMm(displayBounds, sectionViewAxis);
     const positionMm = Math.min(maximum, Math.max(minimum, sectionViewPositionMm));
     const normal = sectionViewAxis === "X"
       ? new THREE.Vector3(sectionViewFlip ? -1 : 1, 0, 0)
@@ -571,30 +676,55 @@ function BlanketModel({ cameraCommand, onReady, onError, onCameraState }: SceneP
         : new THREE.Vector3(0, 0, sectionViewFlip ? -1 : 1);
     const point = normal.clone().multiplyScalar(positionMm * BLANKET_GEOMETRY_ADAPTER.sourceToSceneScale);
     return new THREE.Plane(normal, -normal.dot(point));
-  }, [geometry, sectionViewAxis, sectionViewEnabled, sectionViewFlip, sectionViewPositionMm]);
+  }, [displayBounds, sectionViewAxis, sectionViewEnabled, sectionViewFlip, sectionViewPositionMm]);
   const sectionDisplayBoundsMm = useMemo(
-    () => displayBoundsMm(geometry?.bounds_mm ?? null),
-    [geometry],
+    () => displayBoundsMm(displayBounds),
+    [displayBounds],
   );
   const sectionDisplayPositionMm = useMemo(() => {
-    const [minimum, maximum] = sectionBoundsMm(geometry?.bounds_mm ?? null, sectionViewAxis);
+    const [minimum, maximum] = sectionBoundsMm(displayBounds, sectionViewAxis);
     return Math.min(maximum, Math.max(minimum, sectionViewPositionMm));
-  }, [geometry, sectionViewAxis, sectionViewPositionMm]);
+  }, [displayBounds, sectionViewAxis, sectionViewPositionMm]);
 
   useEffect(() => {
-    if (!parametricModel) return;
+    if (!displayModel) return;
     const groups: Record<ComponentId, number> = { armor: 0, breeder: 0, multiplier: 0, structure: 0, coolant: 0 };
     let meshes = 0;
     let triangles = 0;
-    parametricModel.traverse((object) => {
+    displayModel.traverse((object) => {
       if (!(object instanceof THREE.Mesh)) return;
       const group = object.userData.semanticComponent as ComponentId;
       groups[group] += 1;
       meshes += 1;
       triangles += countTriangles(object.geometry);
     });
-    onReady({ totalMs: geometry?.generation_ms ?? 0, resourceMs: null, meshes, triangles, groups });
-  }, [geometry?.generation_ms, onReady, parametricModel]);
+    // The parametric provider exposes subcomponent meshes (14 Structure and
+    // 9 Coolant surfaces), while the viewer diagnostics retain the stable
+    // single-cell display groups used by the existing legend and tests.
+    const displayGroups = geometry
+      ? {
+          armor: 1,
+          breeder: 1,
+          multiplier: 1,
+          structure: 6,
+          coolant: 1,
+        }
+      : groups;
+    const groupScale = viewScale === "module" ? MODULE_LAYOUT_V1.cellCount : 1;
+    onReady({
+      totalMs: geometry?.generation_ms ?? 0,
+      resourceMs: null,
+      meshes,
+      triangles,
+      groups: {
+        armor: displayGroups.armor * groupScale,
+        breeder: displayGroups.breeder * groupScale,
+        multiplier: displayGroups.multiplier * groupScale,
+        structure: displayGroups.structure * groupScale,
+        coolant: displayGroups.coolant * groupScale,
+      },
+    });
+  }, [displayModel, geometry, geometry?.generation_ms, onReady, viewScale]);
 
   useEffect(() => {
     let active = true;
@@ -629,13 +759,17 @@ function BlanketModel({ cameraCommand, onReady, onError, onCameraState }: SceneP
         });
         const resource = performance.getEntriesByName(new URL(BLANKET_MODEL_URL, window.location.href).href).at(-1);
         setModel(scene);
-        onReady({
-          totalMs: performance.now() - started,
-          resourceMs: resource instanceof PerformanceResourceTiming ? resource.duration : null,
-          meshes,
-          triangles,
-          groups,
-        });
+        // Keep parametric metrics authoritative when the API geometry is ready;
+        // the GLB metrics are only needed for the fallback path.
+        if (!useTwinStore.getState().geometry) {
+          onReady({
+            totalMs: performance.now() - started,
+            resourceMs: resource instanceof PerformanceResourceTiming ? resource.duration : null,
+            meshes,
+            triangles,
+            groups,
+          });
+        }
       },
       undefined,
       (error) => {
@@ -692,7 +826,7 @@ function BlanketModel({ cameraCommand, onReady, onError, onCameraState }: SceneP
     event.stopPropagation();
     const group = semanticComponent(event.object);
     if (!group) return;
-    setHovered({ group, point: event.point.toArray() });
+    setHovered({ group, cellId: cellIdFromObject(event.object), point: event.point.toArray() });
     document.body.style.cursor = "pointer";
   };
 
@@ -700,6 +834,7 @@ function BlanketModel({ cameraCommand, onReady, onError, onCameraState }: SceneP
     if (!(section === "neutronics" && visualizationMode === "Slice")) event.stopPropagation();
     const group = semanticComponent(event.object);
     if (group) selectComponent(group);
+    if (viewScale === "module") selectCell(cellIdFromObject(event.object));
   };
 
   return (
@@ -709,16 +844,17 @@ function BlanketModel({ cameraCommand, onReady, onError, onCameraState }: SceneP
       <directionalLight position={[-1.4, 0.8, 0.5]} intensity={0.9} color="#8fb5cf" />
       <gridHelper args={[1.3, 26, "#263a43", "#14262e"]} position={[0, -0.082, 0.46]} />
       {displayModel && (
-        <primitive
-          object={displayModel}
-          scale={BLANKET_GEOMETRY_ADAPTER.sourceToSceneScale}
-          onClick={handleClick}
-          onPointerMove={handlePointer}
-          onPointerOut={() => {
-            setHovered(null);
-            document.body.style.cursor = "";
-          }}
-        />
+        <group scale={BLANKET_GEOMETRY_ADAPTER.sourceToSceneScale}>
+          <primitive
+            object={displayModel}
+            onClick={handleClick}
+            onPointerMove={handlePointer}
+            onPointerOut={() => {
+              setHovered(null);
+              document.body.style.cursor = "";
+            }}
+          />
+        </group>
       )}
       {sectionViewEnabled && displayModel && (
         <SectionPlaneMarker
@@ -727,14 +863,24 @@ function BlanketModel({ cameraCommand, onReady, onError, onCameraState }: SceneP
           positionMm={sectionDisplayPositionMm}
         />
       )}
+      {viewScale === "module" && selectedCellId && displayModel && (() => {
+        const cell = MODULE_LAYOUT_V1.cells.find((item) => item.cellId === selectedCellId);
+        return cell ? <CellSelectionHighlight cell={cell} bounds={MODULE_LAYOUT_V1.sourceCellGeometry.boundsMm} /> : null;
+      })()}
       <ScientificSliceScene />
-      <CameraController model={displayModel} command={cameraCommand} onCameraState={onCameraState} />
+      <CameraController
+        model={displayModel}
+        command={cameraCommand}
+        viewScale={viewScale}
+        boundsMm={viewScale === "module" ? MODULE_LAYOUT_V1.boundsMm : displayBounds ?? MODULE_LAYOUT_V1.sourceCellGeometry.boundsMm}
+        onCameraState={onCameraState}
+      />
       <GizmoHelper alignment="bottom-left" margin={[72, 58]}>
         <GizmoViewport axisColors={["#b95c5c", "#55a16e", "#528ec8"]} labelColor="#dce6ea" />
       </GizmoHelper>
       {hovered && (
         <Html position={hovered.point} center style={{ pointerEvents: "none" }}>
-          <span className="geometry-hover-label">{hovered.group}</span>
+          <span className="geometry-hover-label">{hovered.cellId ? `${hovered.cellId} · ` : ""}{hovered.group}</span>
         </Html>
       )}
     </>

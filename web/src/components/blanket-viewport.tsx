@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { BLANKET_GEOMETRY_ADAPTER } from "@/lib/blanket-geometry";
+import { MODULE_LAYOUT_V1 } from "@/lib/module-layout";
 import { mockTwinState } from "@/lib/mock-twin-state";
 import { useTwinStore } from "@/lib/twin-store";
 import { SCIENTIFIC_COLOR_GRADIENT, scalarDomain } from "@/lib/scientific-field";
@@ -27,6 +28,8 @@ export function BlanketViewport() {
   const [cameraState, setCameraState] = useState<CameraState | null>(null);
   const [fullscreen, setFullscreen] = useState(false);
   const section = useTwinStore((state) => state.section);
+  const viewScale = useTwinStore((state) => state.viewScale);
+  const selectedCellId = useTwinStore((state) => state.selectedCellId);
   const fieldId = useTwinStore((state) => state.activeFieldId);
   const mode = useTwinStore((state) => state.visualizationMode);
   const scientificSlices = useTwinStore((state) => state.scientificSlices);
@@ -55,13 +58,18 @@ export function BlanketViewport() {
   const scientificLayer = activeScientificSlice;
   const scientificLayerIndex = scientificLayer?.layerIndex ?? null;
   const activeRecord = scientificField?.manifest.fields[fieldId] ?? null;
-  const sectionBounds = geometry?.bounds_mm?.length === 6
-    ? geometry.bounds_mm
-    : [...BLANKET_GEOMETRY_ADAPTER.sourceBoundsMm.min, ...BLANKET_GEOMETRY_ADAPTER.sourceBoundsMm.max];
+  const fallbackBounds = [
+    BLANKET_GEOMETRY_ADAPTER.sourceBoundsMm.min[0], BLANKET_GEOMETRY_ADAPTER.sourceBoundsMm.max[0],
+    BLANKET_GEOMETRY_ADAPTER.sourceBoundsMm.min[1], BLANKET_GEOMETRY_ADAPTER.sourceBoundsMm.max[1],
+    BLANKET_GEOMETRY_ADAPTER.sourceBoundsMm.min[2], BLANKET_GEOMETRY_ADAPTER.sourceBoundsMm.max[2],
+  ];
+  const sectionBounds = viewScale === "module"
+    ? MODULE_LAYOUT_V1.boundsMm
+    : geometry?.bounds_mm?.length === 6 ? geometry.bounds_mm : fallbackBounds;
   const sectionAxisIndex = sectionViewAxis === "X" ? 0 : sectionViewAxis === "Y" ? 1 : 2;
-  const sectionBoundsIndex = geometry?.bounds_mm?.length === 6 ? sectionAxisIndex * 2 : sectionAxisIndex;
+  const sectionBoundsIndex = sectionAxisIndex * 2;
   const sectionMinimum = sectionBounds[sectionBoundsIndex];
-  const sectionMaximum = geometry?.bounds_mm?.length === 6 ? sectionBounds[sectionBoundsIndex + 1] : sectionBounds[sectionAxisIndex + 3];
+  const sectionMaximum = sectionBounds[sectionBoundsIndex + 1];
   const sectionPosition = Math.min(sectionMaximum, Math.max(sectionMinimum, sectionViewPositionMm));
   const scaleLabel = log ? "Log" : "Linear";
   const scalarTicks = activeRecord
@@ -110,12 +118,12 @@ export function BlanketViewport() {
       <div className="viewport-header">
         <div>
           <span className="viewport-kicker"><Box size={12} /> WEB CAD GEOMETRY</span>
-          <h2>Blanket Unit Cell <small>/ {hasParametricGeometry ? "Parametric CSG · Python provider" : "Fixed GLB derived from STEP"}</small></h2>
+          <h2>{viewScale === "module" ? "Blanket Module" : "Blanket Unit Cell"} <small>/ {viewScale === "module" ? "Module Layout V1 · shared cell geometry" : hasParametricGeometry ? "Parametric CSG · Python provider" : "Fixed GLB derived from STEP"}</small></h2>
         </div>
         <div className="viewport-state" data-testid="viewport-state">
-          <span><i className={geometryState === "error" ? "is-error" : ""} /> {neutronics ? fieldDisplayName : "Web CAD Geometry"}</span>
+          <span><i className={geometryState === "error" ? "is-error" : ""} /> {viewScale === "module" ? "Module geometry" : neutronics ? fieldDisplayName : "Web CAD Geometry"}</span>
           <Badge tone={geometryState === "ready" ? "green" : geometryState === "error" ? "amber" : "muted"}>
-            {geometryState === "error" ? (hasParametricGeometry ? "Parametric geometry" : "GLB fallback") : geometryStatus === "loading" ? "Generating geometry" : geometryStatus === "success" ? "Parametric geometry ready" : geometryState === "ready" ? "Geometry ready" : "Loading geometry"}
+            {viewScale === "module" ? `${MODULE_LAYOUT_V1.cellCount} cells · geometry only` : geometryState === "error" ? (hasParametricGeometry ? "Parametric geometry" : "GLB fallback") : geometryStatus === "loading" ? "Generating geometry" : geometryStatus === "success" ? "Parametric geometry ready" : geometryState === "ready" ? "Geometry ready" : "Loading geometry"}
           </Badge>
         </div>
       </div>
@@ -155,14 +163,14 @@ export function BlanketViewport() {
             <Box size={24} /><strong>Blanket geometry asset unavailable</strong><small>{geometryError}</small><code>public/models/blanket_unit_cell.glb</code>
           </div>
         )}
-        {neutronics && scientificStatus !== "ready" && scientificStatus !== "error" && (
+        {viewScale === "single-cell" && neutronics && scientificStatus !== "ready" && scientificStatus !== "error" && (
           <div className="scientific-load-state" role="status" data-testid="scientific-loading">
             <span className="geometry-spinner" />
             <strong>{scientificStatus === "loading-scalars" ? "Loading scalar array" : scientificStatus === "loading-geometry" ? "Validating scientific geometry" : "Loading scientific metadata"}</strong>
             <small>Reference MCNP simulation · {fieldDisplayName}</small>
           </div>
         )}
-        {neutronics && scientificStatus === "error" && (
+        {viewScale === "single-cell" && neutronics && scientificStatus === "error" && (
           <div className="scientific-load-state scientific-error" role="alert" data-testid="scientific-error">
             <AlertTriangle size={20} />
             <strong>Scientific field asset unavailable</strong>
@@ -170,7 +178,7 @@ export function BlanketViewport() {
             <span>CAD and scalar Twin API remain independent.</span>
           </div>
         )}
-        {neutronics && scientificStatus === "ready" && mode === "Slice" && scientificField && activeRecord && scalarTicks && (
+        {viewScale === "single-cell" && neutronics && scientificStatus === "ready" && mode === "Slice" && scientificField && activeRecord && scalarTicks && (
           <div className="scientific-scalar-bar" data-testid="scientific-scalar-bar">
             <div className="scalar-bar-heading"><strong>{activeRecord.display_name}</strong><span>{activeRecord.display_units} · {scaleLabel}</span></div>
             <div className="scalar-bar-body">
@@ -206,13 +214,20 @@ export function BlanketViewport() {
            data-clipping-plane-count={sectionViewEnabled ? "1" : "0"}
            data-section-plane-visible={sectionViewEnabled}
            data-section-material-policy="component-opacity-controlled"
+           data-view-scale={viewScale}
+           data-module-layout-id={viewScale === "module" ? MODULE_LAYOUT_V1.layoutId : "single-cell"}
+           data-module-cell-count={viewScale === "module" ? MODULE_LAYOUT_V1.cellCount : "1"}
+           data-module-pitch-x-mm={viewScale === "module" ? MODULE_LAYOUT_V1.pitchDefinition.pitchXmm.toFixed(3) : "single-cell"}
+           data-module-pitch-y-mm={viewScale === "module" ? MODULE_LAYOUT_V1.pitchDefinition.pitchYmm.toFixed(3) : "single-cell"}
+           data-module-bounds-mm={viewScale === "module" ? MODULE_LAYOUT_V1.boundsMm.join(",") : "single-cell"}
+           data-selected-cell-id={selectedCellId ?? "none"}
          >
           {mockTwinState.components.map((component) => (
             <span key={component.id} data-testid={`geometry-group-${component.id}`} data-visible={visibility[component.id]} data-selected={selectedComponentId === component.id} data-mesh-count={metrics.groups[component.id]} />
           ))}
         </div>
       )}
-      {scientificField && scientificStatus === "ready" && (
+      {viewScale === "single-cell" && scientificField && scientificStatus === "ready" && (
         <div
           className="geometry-diagnostics"
           data-testid="scientific-field-ready"
@@ -244,7 +259,7 @@ export function BlanketViewport() {
           data-scalar-domain={activeRecord ? scalarDomain(activeRecord, log ? "log" : "linear").join(",") : "unknown"}
         />
       )}
-      {scientificField && scientificStatus === "ready" && scientificSlices.map((slice) => (
+      {viewScale === "single-cell" && scientificField && scientificStatus === "ready" && scientificSlices.map((slice) => (
         <span
           key={slice.id}
           className="geometry-diagnostics"
@@ -259,7 +274,7 @@ export function BlanketViewport() {
         />
       ))}
       <div className="viewport-footer">
-        <span>PROJECT AXES: +Z = TOKAMAK +R · Z=0 PLASMA-FACING ARMOR</span>
+        <span>{viewScale === "module" ? `MODULE LAYOUT V1 · ${MODULE_LAYOUT_V1.cellCount} CELLS · SHARED CELL DESIGN` : "PROJECT AXES: +Z = TOKAMAK +R · Z=0 PLASMA-FACING ARMOR"}</span>
         <span>SOURCE / DISPLAY: MM</span>
         <span>{metrics ? `${metrics.triangles.toLocaleString()} TRIANGLES · ${metrics.meshes} MESHES` : "FIXED GLB FALLBACK"}</span>
       </div>

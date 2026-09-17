@@ -29,6 +29,7 @@ import type {
   VisualizationMode,
   WorkspaceSection,
   ScientificSlice,
+  ViewScale,
 } from "./twin-types";
 
 export type CameraCommand = {
@@ -73,6 +74,8 @@ interface TwinUiState {
   sectionViewAxis: SliceAxis;
   sectionViewPositionMm: number;
   sectionViewFlip: boolean;
+  viewScale: ViewScale;
+  selectedCellId: string | null;
   cameraCommand: CameraCommand;
   initializeTwinApi: () => Promise<void>;
   initializeScientificField: () => Promise<void>;
@@ -102,6 +105,8 @@ interface TwinUiState {
   setSectionViewAxis: (axis: SliceAxis) => void;
   setSectionViewPosition: (positionMm: number) => void;
   setSectionViewFlip: (flip: boolean) => void;
+  setViewScale: (viewScale: ViewScale) => void;
+  selectCell: (cellId: string | null) => void;
   requestCamera: (action: CameraCommand["action"]) => void;
 }
 
@@ -147,6 +152,8 @@ export const useTwinStore = create<TwinUiState>((set, get) => ({
   sectionViewAxis: "Z",
   sectionViewPositionMm: 460.5,
   sectionViewFlip: false,
+  viewScale: "single-cell",
+  selectedCellId: null,
   cameraCommand: { action: "reset", sequence: 0 },
   initializeTwinApi: () => {
     initializationPromise ??= initializeTwinState();
@@ -348,6 +355,12 @@ export const useTwinStore = create<TwinUiState>((set, get) => ({
   setSectionViewAxis: (sectionViewAxis) => set({ sectionViewAxis }),
   setSectionViewPosition: (sectionViewPositionMm) => set({ sectionViewPositionMm }),
   setSectionViewFlip: (sectionViewFlip) => set({ sectionViewFlip }),
+  setViewScale: (viewScale) => set((state) => ({
+    viewScale,
+    selectedCellId: viewScale === "module" ? state.selectedCellId : null,
+    cameraCommand: { action: "fit", sequence: state.cameraCommand.sequence + 1 },
+  })),
+  selectCell: (selectedCellId) => set({ selectedCellId }),
   requestCamera: (action) => set((state) => ({ cameraCommand: { action, sequence: state.cameraCommand.sequence + 1 } })),
 }));
 

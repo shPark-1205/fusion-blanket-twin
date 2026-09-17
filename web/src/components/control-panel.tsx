@@ -7,9 +7,11 @@ import { Slider } from "@/components/ui/slider";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { BLANKET_GEOMETRY_ADAPTER } from "@/lib/blanket-geometry";
 import { mockTwinState } from "@/lib/mock-twin-state";
+import { MODULE_LAYOUT_V1 } from "@/lib/module-layout";
 import { MAX_SCIENTIFIC_SLICES, useTwinStore } from "@/lib/twin-store";
-import type { ScientificFieldId, ScientificSlice, SliceAxis, VisualizationMode } from "@/lib/twin-types";
+import type { ScientificFieldId, ScientificSlice, SliceAxis, ViewScale, VisualizationMode } from "@/lib/twin-types";
 import { axisBoundaries } from "@/lib/scientific-field";
+import type { CSSProperties } from "react";
 
 const sectionMeta = {
   overview: ["SYSTEM", "Twin overview"],
@@ -18,6 +20,24 @@ const sectionMeta = {
   "thermal-hydraulics": ["CFX", "Thermal-hydraulics"],
   performance: ["METRICS", "Performance"],
 } as const;
+
+const moduleMapBounds = {
+  minX: Math.min(...MODULE_LAYOUT_V1.cells.map((cell) => cell.positionMm.x)),
+  maxX: Math.max(...MODULE_LAYOUT_V1.cells.map((cell) => cell.positionMm.x)),
+  minY: Math.min(...MODULE_LAYOUT_V1.cells.map((cell) => cell.positionMm.y)),
+  maxY: Math.max(...MODULE_LAYOUT_V1.cells.map((cell) => cell.positionMm.y)),
+};
+
+function moduleCellMapStyle(cell: (typeof MODULE_LAYOUT_V1.cells)[number]): CSSProperties {
+  const xRange = moduleMapBounds.maxX - moduleMapBounds.minX;
+  const yRange = moduleMapBounds.maxY - moduleMapBounds.minY;
+  const mapPaddingX = 8;
+  const mapPaddingY = 12;
+  return {
+    left: `${mapPaddingX + ((cell.positionMm.x - moduleMapBounds.minX) / xRange) * (100 - mapPaddingX * 2)}%`,
+    top: `${mapPaddingY + ((moduleMapBounds.maxY - cell.positionMm.y) / yRange) * (100 - mapPaddingY * 2)}%`,
+  };
+}
 
 function PanelHeading({ eyebrow, title }: { eyebrow: string; title: string }) {
   return (
@@ -76,6 +96,51 @@ function ParameterControl({
   );
 }
 
+function ScaleModeControls() {
+  const viewScale = useTwinStore((state) => state.viewScale);
+  const selectedCellId = useTwinStore((state) => state.selectedCellId);
+  const setViewScale = useTwinStore((state) => state.setViewScale);
+  const selectCell = useTwinStore((state) => state.selectCell);
+  const selectedCell = MODULE_LAYOUT_V1.cells.find((cell) => cell.cellId === selectedCellId) ?? null;
+  return (
+    <div className="panel-section panel-section-first scale-mode-controls" data-testid="scale-mode-controls">
+      <div className="section-label">VIEW SCALE</div>
+      <ToggleGroup type="single" value={viewScale} onValueChange={(value) => value && setViewScale(value as ViewScale)} className="segmented" data-testid="view-scale-toggle">
+        <ToggleGroupItem value="single-cell" data-testid="view-scale-single-cell">Single Cell</ToggleGroupItem>
+        <ToggleGroupItem value="module" data-testid="view-scale-module">Module</ToggleGroupItem>
+      </ToggleGroup>
+      {viewScale === "module" ? (
+        <div className="module-layout-summary" data-testid="module-layout-summary">
+          <div><strong>Module Layout V1</strong><span data-testid="module-cell-count">{MODULE_LAYOUT_V1.cellCount} cells · geometry only</span></div>
+          {selectedCell ? (
+            <div className="selected-cell-summary" data-testid="selected-cell-info">
+              <strong>{selectedCell.cellId}</strong>
+              <span>row {selectedCell.row} · column {selectedCell.column} · q {selectedCell.q} · r {selectedCell.r}</span>
+              <span>center {selectedCell.positionMm.x.toFixed(1)}, {selectedCell.positionMm.y.toFixed(1)}, {selectedCell.positionMm.z.toFixed(1)} mm</span>
+            </div>
+          ) : <span data-testid="selected-cell-info">Select a cell to inspect its shared design.</span>}
+          <div className="module-cell-map" aria-label="Module cell occupancy">
+            {MODULE_LAYOUT_V1.cells.map((cell) => (
+              <button
+                type="button"
+                key={cell.cellId}
+                className={selectedCellId === cell.cellId ? "is-selected" : ""}
+                style={moduleCellMapStyle(cell)}
+                onClick={() => selectCell(cell.cellId)}
+                aria-label={`Select ${cell.cellId}`}
+                aria-pressed={selectedCellId === cell.cellId}
+                data-testid={`module-cell-${cell.cellId}`}
+              >R{cell.row}C{cell.column}</button>
+            ))}
+          </div>
+          <span data-testid="module-pitch-definition">Fixed pitch X {MODULE_LAYOUT_V1.pitchDefinition.pitchXmm.toFixed(2)} mm · Y {MODULE_LAYOUT_V1.pitchDefinition.pitchYmm.toFixed(2)} mm</span>
+          <small>Fixed pitch from the unit-cell outer RAFM hex. No module-scale field data.</small>
+        </div>
+      ) : <p className="control-help">The stabilized single-cell viewer remains the default scale.</p>}
+    </div>
+  );
+}
+
 function ComponentDisplayControls() {
   const selectedId = useTwinStore((state) => state.selectedComponentId);
   const visibility = useTwinStore((state) => state.componentVisibility);
@@ -123,26 +188,31 @@ function GeometrySectionControls() {
   const axis = useTwinStore((state) => state.sectionViewAxis);
   const positionMm = useTwinStore((state) => state.sectionViewPositionMm);
   const flip = useTwinStore((state) => state.sectionViewFlip);
+  const viewScale = useTwinStore((state) => state.viewScale);
   const geometryBounds = useTwinStore((state) => state.geometry?.bounds_mm ?? null);
   const setEnabled = useTwinStore((state) => state.setSectionViewEnabled);
   const setAxis = useTwinStore((state) => state.setSectionViewAxis);
   const setPosition = useTwinStore((state) => state.setSectionViewPosition);
   const setFlip = useTwinStore((state) => state.setSectionViewFlip);
-  const fallbackBounds = [...BLANKET_GEOMETRY_ADAPTER.sourceBoundsMm.min, ...BLANKET_GEOMETRY_ADAPTER.sourceBoundsMm.max];
-  const bounds = geometryBounds?.length === 6 ? geometryBounds : fallbackBounds;
+  const fallbackBounds = [
+    BLANKET_GEOMETRY_ADAPTER.sourceBoundsMm.min[0], BLANKET_GEOMETRY_ADAPTER.sourceBoundsMm.max[0],
+    BLANKET_GEOMETRY_ADAPTER.sourceBoundsMm.min[1], BLANKET_GEOMETRY_ADAPTER.sourceBoundsMm.max[1],
+    BLANKET_GEOMETRY_ADAPTER.sourceBoundsMm.min[2], BLANKET_GEOMETRY_ADAPTER.sourceBoundsMm.max[2],
+  ];
+  const bounds = viewScale === "module" ? MODULE_LAYOUT_V1.boundsMm : geometryBounds?.length === 6 ? geometryBounds : fallbackBounds;
   const axisIndex = axis === "X" ? 0 : axis === "Y" ? 1 : 2;
-  const minimum = geometryBounds?.length === 6 ? bounds[axisIndex * 2] : bounds[axisIndex];
-  const maximum = geometryBounds?.length === 6 ? bounds[axisIndex * 2 + 1] : bounds[axisIndex + 3];
+  const minimum = bounds[axisIndex * 2];
+  const maximum = bounds[axisIndex * 2 + 1];
   const safeMinimum = Number.isFinite(minimum) ? minimum : fallbackBounds[axisIndex];
-  const safeMaximum = Number.isFinite(maximum) ? maximum : fallbackBounds[axisIndex + 3];
+  const safeMaximum = Number.isFinite(maximum) ? maximum : fallbackBounds[axisIndex * 2 + 1];
   const clampedPosition = Math.min(safeMaximum, Math.max(safeMinimum, positionMm));
   const step = Math.max((safeMaximum - safeMinimum) / 200, 0.1);
   const handleAxisChange = (value: string) => {
     if (!value) return;
     const nextAxis = value as "X" | "Y" | "Z";
     const nextIndex = nextAxis === "X" ? 0 : nextAxis === "Y" ? 1 : 2;
-    const nextMinimum = geometryBounds?.length === 6 ? bounds[nextIndex * 2] : bounds[nextIndex];
-    const nextMaximum = geometryBounds?.length === 6 ? bounds[nextIndex * 2 + 1] : bounds[nextIndex + 3];
+    const nextMinimum = bounds[nextIndex * 2];
+    const nextMaximum = bounds[nextIndex * 2 + 1];
     setAxis(nextAxis);
     setPosition((nextMinimum + nextMaximum) / 2);
   };
@@ -201,6 +271,17 @@ function ScientificDisplayControls() {
         />
       </label>
       <p className="control-help">Visualization only; raw MCNP values and probe data are unchanged.</p>
+    </div>
+  );
+}
+
+function ModuleScientificNotice() {
+  return (
+    <div className="panel-section module-scientific-notice" data-testid="module-scientific-notice">
+      <div className="section-label">SCIENTIFIC DISPLAY</div>
+      <Badge tone="muted">Unavailable</Badge>
+      <p>Module-scale MCNP field data is not available yet.</p>
+      <small>The loaded MCNP field remains a single-cell reference and is not repeated across the array. A future milestone may allow reference-field inspection on a selected cell.</small>
     </div>
   );
 }
@@ -605,11 +686,13 @@ function PerformanceControls() {
 
 export function ControlPanel() {
   const section = useTwinStore((state) => state.section);
+  const viewScale = useTwinStore((state) => state.viewScale);
   const [eyebrow, title] = sectionMeta[section];
   return (
     <aside className="control-panel" data-testid="control-panel">
       <PanelHeading eyebrow={eyebrow} title={title} />
       <div className="control-scroll">
+        <ScaleModeControls />
         {section === "overview" && <OverviewControls />}
         {section === "design" && <DesignControls />}
         {section === "neutronics" && <NeutronicsControls />}
@@ -617,7 +700,8 @@ export function ControlPanel() {
         {section === "performance" && <PerformanceControls />}
         {section !== "thermal-hydraulics" && <ComponentDisplayControls />}
         {section !== "thermal-hydraulics" && <GeometrySectionControls />}
-        {section === "neutronics" && <ScientificDisplayControls />}
+        {section === "neutronics" && viewScale === "single-cell" && <ScientificDisplayControls />}
+        {section === "neutronics" && viewScale === "module" && <ModuleScientificNotice />}
       </div>
     </aside>
   );

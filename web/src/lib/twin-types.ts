@@ -11,6 +11,7 @@ export type FieldSource = "Not connected" | "Reference MCNP Field";
 export type VisualizationMode = "Off" | "Slice" | "Iso-surface";
 export type SliceAxis = "X" | "Y" | "Z";
 export type ComponentId = "armor" | "breeder" | "multiplier" | "structure" | "coolant";
+export type ViewScale = "single-cell" | "module";
 export type ScientificFieldId =
   | "neutron_flux"
   | "photon_flux"
