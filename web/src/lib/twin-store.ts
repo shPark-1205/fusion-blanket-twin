@@ -2,8 +2,13 @@ import { create } from "zustand";
 import { mockTwinState } from "./mock-twin-state";
 import { twinApi, TwinApiError } from "./twin-api";
 import { geometryApi, type GeometryDesignResponse } from "./geometry-api";
+import { MODULE_LAYOUT_V1, moduleAxisBounds, moduleCellTranslationMm } from "./module-layout";
+import { recordScientificStateUpdate } from "./scientific-performance";
 import {
+  axisBoundaries,
+  autoDisplayRange,
   buildVoxelProbe,
+  isValidDisplayRange,
   loadAllScientificFieldValues,
   loadScientificFieldValues,
   loadScientificManifest,
@@ -14,6 +19,7 @@ import {
   type ScientificFieldStatus,
   type ScientificLoadMetrics,
   type ScientificProbeStatus,
+  type ScaleMode,
   type ScientificVoxelProbe,
 } from "./scientific-field";
 import type {
@@ -29,6 +35,9 @@ import type {
   VisualizationMode,
   WorkspaceSection,
   ScientificSlice,
+  ScientificDisplayRangeMode,
+  ScientificDisplayRangeState,
+  ViewScale,
 } from "./twin-types";
 
 export type CameraCommand = {
@@ -63,6 +72,8 @@ interface TwinUiState {
   activeFieldId: ScientificFieldId;
   visualizationMode: VisualizationMode;
   useLogScale: boolean;
+  scientificDisplayRanges: Record<ScientificFieldId, ScientificDisplayRangeState>;
+  isoValuesByField: Partial<Record<ScientificFieldId, number>>;
   scientificSlices: ScientificSlice[];
   activeScientificSliceId: string | null;
   selectedComponentId: ComponentId;
@@ -73,10 +84,17 @@ interface TwinUiState {
   sectionViewAxis: SliceAxis;
   sectionViewPositionMm: number;
   sectionViewFlip: boolean;
+  viewScale: ViewScale;
+  selectedCellId: string | null;
+  neutronAnimationEnabled: boolean;
+  neutronAnimationDensity: number;
+  neutronAnimationSpeed: number;
+  plasmaSourceEnabled: boolean;
+  plasmaSourceIntensity: number;
   cameraCommand: CameraCommand;
   initializeTwinApi: () => Promise<void>;
   initializeScientificField: () => Promise<void>;
-  reportScientificRender: (firstRenderMs: number | null, sliceUpdateMs: number) => void;
+  reportScientificRender: (firstRenderMs: number | null, sliceUpdateMs: number, renderedSliceCount?: number, renderedVertexCount?: number, renderedPatchCount?: number) => void;
   setSection: (section: WorkspaceSection) => void;
   setPz206: (value: number) => void;
   setCz301: (value: number) => void;
@@ -93,7 +111,11 @@ interface TwinUiState {
   setScientificSliceOpacity: (id: string, opacity: number) => void;
   setAllScientificSliceOpacity: (opacity: number) => void;
   setUseLogScale: (enabled: boolean) => void;
-  probeScientificVoxel: (sliceId: string, pointMm: [number, number, number]) => Promise<void>;
+  setScientificDisplayRangeMode: (fieldId: ScientificFieldId, mode: ScientificDisplayRangeMode) => void;
+  setScientificDisplayRangeValues: (fieldId: ScientificFieldId, minimum: number, maximum: number) => void;
+  resetScientificDisplayRange: (fieldId: ScientificFieldId) => void;
+  setIsoValue: (fieldId: ScientificFieldId, value: number) => void;
+  probeScientificVoxel: (sliceId: string, pointMm: [number, number, number], moduleCellId?: string, localSlicePositionMm?: number) => Promise<void>;
   clearScientificProbe: () => void;
   selectComponent: (id: ComponentId) => void;
   toggleComponent: (id: ComponentId) => void;
@@ -102,6 +124,13 @@ interface TwinUiState {
   setSectionViewAxis: (axis: SliceAxis) => void;
   setSectionViewPosition: (positionMm: number) => void;
   setSectionViewFlip: (flip: boolean) => void;
+  setViewScale: (viewScale: ViewScale) => void;
+  selectCell: (cellId: string | null) => void;
+  setNeutronAnimationEnabled: (enabled: boolean) => void;
+  setNeutronAnimationDensity: (density: number) => void;
+  setNeutronAnimationSpeed: (speed: number) => void;
+  setPlasmaSourceEnabled: (enabled: boolean) => void;
+  setPlasmaSourceIntensity: (intensity: number) => void;
   requestCamera: (action: CameraCommand["action"]) => void;
 }
 
@@ -135,6 +164,8 @@ export const useTwinStore = create<TwinUiState>((set, get) => ({
   activeFieldId: mockTwinState.activeFieldId,
   visualizationMode: "Slice",
   useLogScale: false,
+  scientificDisplayRanges: createInitialDisplayRanges(),
+  isoValuesByField: {},
   scientificSlices: [],
   activeScientificSliceId: null,
   selectedComponentId: "breeder",
@@ -147,6 +178,13 @@ export const useTwinStore = create<TwinUiState>((set, get) => ({
   sectionViewAxis: "Z",
   sectionViewPositionMm: 460.5,
   sectionViewFlip: false,
+  viewScale: "single-cell",
+  selectedCellId: null,
+  neutronAnimationEnabled: false,
+  neutronAnimationDensity: 64,
+  neutronAnimationSpeed: 1,
+  plasmaSourceEnabled: false,
+  plasmaSourceIntensity: 0.7,
   cameraCommand: { action: "reset", sequence: 0 },
   initializeTwinApi: () => {
     initializationPromise ??= initializeTwinState();
@@ -156,12 +194,15 @@ export const useTwinStore = create<TwinUiState>((set, get) => ({
     scientificInitializationPromise ??= initializeScientificState();
     return scientificInitializationPromise;
   },
-  reportScientificRender: (firstRenderMs, sliceUpdateMs) => set((state) => ({
+  reportScientificRender: (firstRenderMs, sliceUpdateMs, renderedSliceCount, renderedVertexCount, renderedPatchCount) => set((state) => ({
     scientificLoadMetrics: state.scientificLoadMetrics
       ? {
           ...state.scientificLoadMetrics,
           firstRenderMs: state.scientificLoadMetrics.firstRenderMs ?? firstRenderMs,
           sliceUpdateMs,
+          ...(renderedSliceCount === undefined ? {} : { renderedSliceCount }),
+          ...(renderedVertexCount === undefined ? {} : { renderedVertexCount }),
+          ...(renderedPatchCount === undefined ? {} : { renderedPatchCount }),
         }
       : null,
   })),
@@ -219,8 +260,11 @@ export const useTwinStore = create<TwinUiState>((set, get) => ({
         state.scientificField.manifest,
         "slice-1",
         state.scientificField.manifest.slicing.default_axis,
-        state.scientificField.manifest.slicing.axes[state.scientificField.manifest.slicing.default_axis].default_position_mm,
+        defaultSlicePosition(state.scientificField.manifest, state.viewScale, state.scientificField.manifest.slicing.default_axis),
         state.scientificSliceOpacity,
+        true,
+        undefined,
+        state.viewScale,
       );
       return { visualizationMode, scientificSlices: [slice], activeScientificSliceId: slice.id, scientificProbe: null, scientificProbeStatus: "idle" };
     }
@@ -236,8 +280,8 @@ export const useTwinStore = create<TwinUiState>((set, get) => ({
     }
     const active = state.scientificSlices.find((slice) => slice.id === state.activeScientificSliceId);
     const axis = active?.axis ?? "Z";
-    const position = active?.requestedPositionMm ?? state.scientificField.manifest.slicing.axes[axis].default_position_mm;
-    const slice = createScientificSlice(state.scientificField.manifest, nextSliceId(state.scientificSlices), axis, position, state.scientificSliceOpacity);
+    const position = active?.requestedPositionMm ?? defaultSlicePosition(state.scientificField.manifest, state.viewScale, axis);
+    const slice = createScientificSlice(state.scientificField.manifest, nextSliceId(state.scientificSlices), axis, position, state.scientificSliceOpacity, true, undefined, state.viewScale);
     return {
       scientificSlices: [...state.scientificSlices, slice],
       activeScientificSliceId: slice.id,
@@ -268,7 +312,7 @@ export const useTwinStore = create<TwinUiState>((set, get) => ({
     if (!state.scientificField) return state;
     return {
       scientificSlices: state.scientificSlices.map((slice) => slice.id === id
-        ? createScientificSlice(state.scientificField!.manifest, id, axis, state.scientificField!.manifest.slicing.axes[axis].default_position_mm, slice.opacity, slice.visible, slice.label)
+        ? createScientificSlice(state.scientificField!.manifest, id, axis, defaultSlicePosition(state.scientificField!.manifest, state.viewScale, axis), slice.opacity, slice.visible, slice.label, state.viewScale)
         : slice),
       scientificProbe: state.scientificProbe?.sliceId === id ? null : state.scientificProbe,
       scientificProbeStatus: state.scientificProbe?.sliceId === id ? "idle" : state.scientificProbeStatus,
@@ -276,10 +320,12 @@ export const useTwinStore = create<TwinUiState>((set, get) => ({
   }),
   setScientificSlicePosition: (id, value) => set((state) => {
     if (!state.scientificField) return state;
+    recordScientificStateUpdate();
+    const scientificSlices = state.scientificSlices.map((slice) => slice.id === id
+      ? createScientificSlice(state.scientificField!.manifest, id, slice.axis, value, slice.opacity, slice.visible, slice.label, state.viewScale)
+      : slice);
     return {
-      scientificSlices: state.scientificSlices.map((slice) => slice.id === id
-        ? createScientificSlice(state.scientificField!.manifest, id, slice.axis, value, slice.opacity, slice.visible, slice.label)
-        : slice),
+      scientificSlices,
       scientificProbe: state.scientificProbe?.sliceId === id ? null : state.scientificProbe,
       scientificProbeStatus: state.scientificProbe?.sliceId === id ? "idle" : state.scientificProbeStatus,
     };
@@ -291,11 +337,36 @@ export const useTwinStore = create<TwinUiState>((set, get) => ({
     scientificSlices: state.scientificSlices.map((slice) => slice.id === id ? { ...slice, opacity: clampSliceOpacity(opacity) } : slice),
   })),
   setUseLogScale: (useLogScale) => set({ useLogScale }),
+  setScientificDisplayRangeMode: (fieldId, mode) => set((state) => {
+    const current = state.scientificDisplayRanges[fieldId];
+    if (mode === "manual" && (current.minimum === null || current.maximum === null)) {
+      const field = state.scientificField?.manifest.fields[fieldId];
+      const [minimum, maximum] = field ? autoDisplayRange(field, state.useLogScale ? "log" : "linear") : [null, null];
+      return { scientificDisplayRanges: { ...state.scientificDisplayRanges, [fieldId]: { mode, minimum, maximum } } };
+    }
+    return { scientificDisplayRanges: { ...state.scientificDisplayRanges, [fieldId]: { ...current, mode } } };
+  }),
+  setScientificDisplayRangeValues: (fieldId, minimum, maximum) => set((state) => {
+    const next = { mode: "manual" as const, minimum, maximum };
+    const scale: ScaleMode = state.useLogScale ? "log" : "linear";
+    if (!isValidDisplayRange(next, scale)) return state;
+    return { scientificDisplayRanges: { ...state.scientificDisplayRanges, [fieldId]: next } };
+  }),
+  resetScientificDisplayRange: (fieldId) => set((state) => ({
+    scientificDisplayRanges: {
+      ...state.scientificDisplayRanges,
+      [fieldId]: { mode: "auto", minimum: null, maximum: null },
+    },
+  })),
+  setIsoValue: (fieldId, value) => set((state) => {
+    if (!Number.isFinite(value)) return state;
+    return { isoValuesByField: { ...state.isoValuesByField, [fieldId]: value } };
+  }),
   setAllScientificSliceOpacity: (opacity) => set((state) => ({
     scientificSliceOpacity: clampSliceOpacity(opacity),
     scientificSlices: state.scientificSlices.map((slice) => ({ ...slice, opacity: clampSliceOpacity(opacity) })),
   })),
-  probeScientificVoxel: async (sliceId, pointMm) => {
+  probeScientificVoxel: async (sliceId, pointMm, moduleCellId, localSlicePositionMm) => {
     const state = get();
     if (!state.scientificField || state.visualizationMode !== "Slice" || state.scientificFieldStatus === "error") return;
     const slice = state.scientificSlices.find((item) => item.id === sliceId);
@@ -303,7 +374,7 @@ export const useTwinStore = create<TwinUiState>((set, get) => ({
     const indices = voxelFromPoint(
       state.scientificField.manifest,
       slice.axis,
-      slice.requestedPositionMm,
+      localSlicePositionMm ?? slice.requestedPositionMm,
       pointMm,
     );
     if (!indices) {
@@ -317,7 +388,27 @@ export const useTwinStore = create<TwinUiState>((set, get) => ({
         state.scientificField.manifest,
         state.scientificField.valuesByField,
       );
-      const probe = buildVoxelProbe(state.scientificField.manifest, valuesByField, indices, sliceId, slice.axis, slice.label);
+      const selectedCell = state.viewScale === "module"
+        ? MODULE_LAYOUT_V1.cells.find((cell) => cell.cellId === (moduleCellId ?? state.selectedCellId)) ?? null
+        : null;
+      const probe = buildVoxelProbe(
+        state.scientificField.manifest,
+        valuesByField,
+        indices,
+        sliceId,
+        slice.axis,
+        slice.label,
+        selectedCell
+          ? {
+              cellId: selectedCell.cellId,
+              row: selectedCell.row,
+              column: selectedCell.column,
+              q: selectedCell.q,
+              r: selectedCell.r,
+              translationMm: moduleCellTranslationMm(selectedCell),
+            }
+          : undefined,
+      );
       set((latest) => ({
         scientificField: latest.scientificField ? { ...latest.scientificField, valuesByField } : latest.scientificField,
         scientificProbe: probe,
@@ -348,6 +439,23 @@ export const useTwinStore = create<TwinUiState>((set, get) => ({
   setSectionViewAxis: (sectionViewAxis) => set({ sectionViewAxis }),
   setSectionViewPosition: (sectionViewPositionMm) => set({ sectionViewPositionMm }),
   setSectionViewFlip: (sectionViewFlip) => set({ sectionViewFlip }),
+  setViewScale: (viewScale) => set((state) => ({
+    viewScale,
+    selectedCellId: viewScale === "module" ? state.selectedCellId : null,
+    scientificSlices: state.scientificField
+      ? state.scientificSlices.map((slice) => createScientificSlice(state.scientificField!.manifest, slice.id, slice.axis, slice.requestedPositionMm, slice.opacity, slice.visible, slice.label, viewScale))
+      : state.scientificSlices,
+    scientificProbe: null,
+    scientificProbeStatus: "idle",
+    scientificProbeError: null,
+    cameraCommand: { action: "fit", sequence: state.cameraCommand.sequence + 1 },
+  })),
+  selectCell: (selectedCellId) => set({ selectedCellId, scientificProbe: null, scientificProbeStatus: "idle", scientificProbeError: null }),
+  setNeutronAnimationEnabled: (neutronAnimationEnabled) => set({ neutronAnimationEnabled }),
+  setNeutronAnimationDensity: (neutronAnimationDensity) => set({ neutronAnimationDensity: clampNeutronDensity(neutronAnimationDensity) }),
+  setNeutronAnimationSpeed: (neutronAnimationSpeed) => set({ neutronAnimationSpeed: clampNeutronSpeed(neutronAnimationSpeed) }),
+  setPlasmaSourceEnabled: (plasmaSourceEnabled) => set({ plasmaSourceEnabled }),
+  setPlasmaSourceIntensity: (plasmaSourceIntensity) => set({ plasmaSourceIntensity: clampPlasmaIntensity(plasmaSourceIntensity) }),
   requestCamera: (action) => set((state) => ({ cameraCommand: { action, sequence: state.cameraCommand.sequence + 1 } })),
 }));
 
@@ -365,7 +473,7 @@ async function initializeScientificState(): Promise<void> {
       scientificLoadMetrics: metrics,
       scientificSlices: state.scientificSlices.length > 0
         ? state.scientificSlices
-        : [createScientificSlice(manifest, "slice-1", manifest.slicing.default_axis, manifest.slicing.axes[manifest.slicing.default_axis].default_position_mm, state.scientificSliceOpacity)],
+        : [createScientificSlice(manifest, "slice-1", manifest.slicing.default_axis, defaultSlicePosition(manifest, state.viewScale, manifest.slicing.default_axis), state.scientificSliceOpacity, true, undefined, state.viewScale)],
       activeScientificSliceId: state.activeScientificSliceId ?? (state.scientificSlices.length > 0 ? state.scientificSlices[0].id : "slice-1"),
     }));
     await loadActiveScientificField(manifest.default_field_key, true);
@@ -473,8 +581,30 @@ function errorMessage(error: unknown): string {
 
 export const MAX_SCIENTIFIC_SLICES = 6;
 
+function createInitialDisplayRanges(): Record<ScientificFieldId, ScientificDisplayRangeState> {
+  return {
+    neutron_flux: { mode: "auto", minimum: null, maximum: null },
+    photon_flux: { mode: "auto", minimum: null, maximum: null },
+    neutron_heating: { mode: "auto", minimum: null, maximum: null },
+    photon_heating: { mode: "auto", minimum: null, maximum: null },
+    nuclear_heating: { mode: "auto", minimum: null, maximum: null },
+  };
+}
+
 function clampSliceOpacity(opacity: number) {
   return Math.max(0.25, Math.min(1, opacity));
+}
+
+function clampNeutronDensity(density: number) {
+  return Math.round(Math.max(12, Math.min(180, density)));
+}
+
+function clampNeutronSpeed(speed: number) {
+  return Math.max(0.25, Math.min(2.5, speed));
+}
+
+function clampPlasmaIntensity(intensity: number) {
+  return Math.max(0.1, Math.min(1.5, intensity));
 }
 
 function nextSliceId(slices: ScientificSlice[]) {
@@ -492,12 +622,23 @@ function createScientificSlice(
   opacity: number,
   visible = true,
   label?: string,
+  viewScale: ViewScale = "single-cell",
 ): ScientificSlice {
-  const layer = selectedLayer(manifest, axis, requestedPositionMm);
+  const bounds = viewScale === "module" ? moduleAxisBounds(MODULE_LAYOUT_V1, axis) : axisBoundaries(manifest, axis);
+  const maximum = bounds.at(-1)!;
+  const boundedPosition = Math.min(maximum, Math.max(bounds[0], requestedPositionMm));
+  const localBounds = axisBoundaries(manifest, axis);
+  // Module X/Y positions are global coordinates. The authoritative local raw
+  // layer is resolved per intersected cell by localModuleSlice in the scene;
+  // keep this source-slice metadata on a stable local reference layer.
+  const localPosition = viewScale === "module"
+    ? manifest.slicing.axes[axis].default_position_mm
+    : Math.min(localBounds.at(-1)!, Math.max(localBounds[0], boundedPosition));
+  const layer = selectedLayer(manifest, axis, localPosition);
   return {
     id,
     axis,
-    requestedPositionMm,
+    requestedPositionMm: boundedPosition,
     layerIndex: layer.index,
     lowerBoundMm: layer.bounds_mm[0],
     upperBoundMm: layer.bounds_mm[1],
@@ -506,4 +647,12 @@ function createScientificSlice(
     opacity: clampSliceOpacity(opacity),
     label: label ?? id,
   };
+}
+
+function defaultSlicePosition(manifest: ScientificFieldData["manifest"], viewScale: ViewScale, axis: SliceAxis) {
+  if (viewScale === "module" && axis !== "Z") {
+    const bounds = moduleAxisBounds(MODULE_LAYOUT_V1, axis);
+    return (bounds[0] + bounds[1]) / 2;
+  }
+  return manifest.slicing.axes[axis].default_position_mm;
 }

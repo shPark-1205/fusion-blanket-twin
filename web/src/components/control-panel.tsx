@@ -7,9 +7,12 @@ import { Slider } from "@/components/ui/slider";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { BLANKET_GEOMETRY_ADAPTER } from "@/lib/blanket-geometry";
 import { mockTwinState } from "@/lib/mock-twin-state";
+import { MODULE_LAYOUT_V1, moduleAxisBounds, moduleCellTranslationMm, moduleCellsIntersectingSlice } from "@/lib/module-layout";
+import { recordScientificSliderInput } from "@/lib/scientific-performance";
 import { MAX_SCIENTIFIC_SLICES, useTwinStore } from "@/lib/twin-store";
-import type { ScientificFieldId, ScientificSlice, SliceAxis, VisualizationMode } from "@/lib/twin-types";
-import { axisBoundaries } from "@/lib/scientific-field";
+import type { ScientificFieldId, ScientificSlice, SliceAxis, ViewScale, VisualizationMode } from "@/lib/twin-types";
+import { autoDisplayRange, axisBoundaries, isValidDisplayRange, resolveDisplayRange, type ScientificFieldRecord } from "@/lib/scientific-field";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 
 const sectionMeta = {
   overview: ["SYSTEM", "Twin overview"],
@@ -18,6 +21,24 @@ const sectionMeta = {
   "thermal-hydraulics": ["CFX", "Thermal-hydraulics"],
   performance: ["METRICS", "Performance"],
 } as const;
+
+const moduleMapBounds = {
+  minX: Math.min(...MODULE_LAYOUT_V1.cells.map((cell) => cell.positionMm.x)),
+  maxX: Math.max(...MODULE_LAYOUT_V1.cells.map((cell) => cell.positionMm.x)),
+  minY: Math.min(...MODULE_LAYOUT_V1.cells.map((cell) => cell.positionMm.y)),
+  maxY: Math.max(...MODULE_LAYOUT_V1.cells.map((cell) => cell.positionMm.y)),
+};
+
+function moduleCellMapStyle(cell: (typeof MODULE_LAYOUT_V1.cells)[number]): CSSProperties {
+  const xRange = moduleMapBounds.maxX - moduleMapBounds.minX;
+  const yRange = moduleMapBounds.maxY - moduleMapBounds.minY;
+  const mapPaddingX = 8;
+  const mapPaddingY = 12;
+  return {
+    left: `${mapPaddingX + ((cell.positionMm.x - moduleMapBounds.minX) / xRange) * (100 - mapPaddingX * 2)}%`,
+    top: `${mapPaddingY + ((moduleMapBounds.maxY - cell.positionMm.y) / yRange) * (100 - mapPaddingY * 2)}%`,
+  };
+}
 
 function PanelHeading({ eyebrow, title }: { eyebrow: string; title: string }) {
   return (
@@ -46,6 +67,7 @@ function ParameterControl({
   onChange,
   testId,
   unit = "cm",
+  editable = false,
 }: {
   label: string;
   value: number;
@@ -55,23 +77,124 @@ function ParameterControl({
   onChange: (value: number) => void;
   testId: string;
   unit?: "cm" | "mm";
+  editable?: boolean;
 }) {
+  const [positionDraft, setPositionDraft] = useState<string | null>(null);
+  const inputId = `${testId}-input`;
+  const updatePosition = (text: string) => {
+    setPositionDraft(text);
+    if (text.trim() === "") return;
+    const parsed = Number(text);
+    if (Number.isFinite(parsed)) onChange(parsed);
+  };
   return (
-    <div className="parameter-control">
+    <div className={`parameter-control${editable ? " scientific-position-control" : ""}`}>
       <div className="parameter-header">
-        <label>{label}</label>
-        <output data-testid={`${testId}-value`}>{value.toFixed(2)} <small>{unit}</small></output>
+        <label htmlFor={editable ? inputId : undefined}>{label}</label>
+        {!editable && <output data-testid={`${testId}-value`}>{value.toFixed(2)} <small>{unit}</small></output>}
       </div>
+      {editable && (
+        <div className="scientific-position-row">
+          <input
+            id={inputId}
+            type="number"
+            inputMode="decimal"
+            min={min}
+            max={max}
+            step="any"
+            value={positionDraft ?? String(value)}
+            onChange={(event) => updatePosition(event.target.value)}
+            onBlur={() => setPositionDraft(null)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === "Escape") event.currentTarget.blur();
+            }}
+            aria-label={`${label} numeric value`}
+            data-testid={`${testId}-input`}
+          />
+          <small>{unit}</small>
+        </div>
+      )}
       <Slider
         data-testid={testId}
         value={[value]}
         min={min}
         max={max}
         step={step}
-        onValueChange={([next]) => onChange(next)}
+        onValueChange={([next]) => next !== undefined && onChange(next)}
         aria-label={label}
       />
       <div className="range-labels"><span>{min.toFixed(2)}</span><span>{max.toFixed(2)}</span></div>
+    </div>
+  );
+}
+
+function useRafScientificPosition(onPosition: (id: string, value: number) => void) {
+  const pending = useRef(new Map<string, number>());
+  const frame = useRef<number | null>(null);
+  const onPositionRef = useRef(onPosition);
+
+  useEffect(() => {
+    onPositionRef.current = onPosition;
+  }, [onPosition]);
+
+  useEffect(() => () => {
+    if (frame.current !== null) cancelAnimationFrame(frame.current);
+  }, []);
+
+  return useCallback((id: string, value: number) => {
+    recordScientificSliderInput();
+    pending.current.set(id, value);
+    if (frame.current !== null) return;
+    frame.current = requestAnimationFrame(() => {
+      frame.current = null;
+      const updates = Array.from(pending.current.entries());
+      pending.current.clear();
+      updates.forEach(([sliceId, position]) => onPositionRef.current(sliceId, position));
+    });
+  }, []);
+}
+
+function ScaleModeControls() {
+  const viewScale = useTwinStore((state) => state.viewScale);
+  const selectedCellId = useTwinStore((state) => state.selectedCellId);
+  const setViewScale = useTwinStore((state) => state.setViewScale);
+  const selectCell = useTwinStore((state) => state.selectCell);
+  const selectedCell = MODULE_LAYOUT_V1.cells.find((cell) => cell.cellId === selectedCellId) ?? null;
+  return (
+    <div className="panel-section panel-section-first scale-mode-controls" data-testid="scale-mode-controls">
+      <div className="section-label">VIEW SCALE</div>
+      <ToggleGroup type="single" value={viewScale} onValueChange={(value) => value && setViewScale(value as ViewScale)} className="segmented" data-testid="view-scale-toggle">
+        <ToggleGroupItem value="single-cell" data-testid="view-scale-single-cell">Single Cell</ToggleGroupItem>
+        <ToggleGroupItem value="module" data-testid="view-scale-module">Module</ToggleGroupItem>
+      </ToggleGroup>
+      {viewScale === "module" ? (
+        <div className="module-layout-summary" data-testid="module-layout-summary">
+          <div><strong>Module Layout V1</strong><span data-testid="module-cell-count">{MODULE_LAYOUT_V1.cellCount} cells · geometry only</span></div>
+          {selectedCell ? (
+            <div className="selected-cell-summary" data-testid="selected-cell-info">
+              <strong>{selectedCell.cellId}</strong>
+              <span>row {selectedCell.row} · column {selectedCell.column} · q {selectedCell.q} · r {selectedCell.r}</span>
+              <span>center {selectedCell.positionMm.x.toFixed(1)}, {selectedCell.positionMm.y.toFixed(1)}, {selectedCell.positionMm.z.toFixed(1)} mm</span>
+            </div>
+          ) : <span data-testid="selected-cell-info">Select a cell to inspect its shared design.</span>}
+          <div className="module-cell-map" aria-label="Module cell occupancy">
+            {MODULE_LAYOUT_V1.cells.map((cell) => (
+              <button
+                type="button"
+                key={cell.cellId}
+                className={selectedCellId === cell.cellId ? "is-selected" : ""}
+                style={moduleCellMapStyle(cell)}
+                onClick={() => selectCell(cell.cellId)}
+                aria-label={`Select ${cell.cellId}`}
+                aria-pressed={selectedCellId === cell.cellId}
+                data-testid={`module-cell-${cell.cellId}`}
+              >R{cell.row}C{cell.column}</button>
+            ))}
+          </div>
+          <span data-testid="module-pitch-definition">Fixed pitch X {MODULE_LAYOUT_V1.pitchDefinition.pitchXmm.toFixed(2)} mm · Y {MODULE_LAYOUT_V1.pitchDefinition.pitchYmm.toFixed(2)} mm</span>
+          <small>Fixed pitch from the unit-cell outer RAFM hex. No module-scale field data.</small>
+        </div>
+      ) : <p className="control-help">The stabilized single-cell viewer remains the default scale.</p>}
     </div>
   );
 }
@@ -123,26 +246,31 @@ function GeometrySectionControls() {
   const axis = useTwinStore((state) => state.sectionViewAxis);
   const positionMm = useTwinStore((state) => state.sectionViewPositionMm);
   const flip = useTwinStore((state) => state.sectionViewFlip);
+  const viewScale = useTwinStore((state) => state.viewScale);
   const geometryBounds = useTwinStore((state) => state.geometry?.bounds_mm ?? null);
   const setEnabled = useTwinStore((state) => state.setSectionViewEnabled);
   const setAxis = useTwinStore((state) => state.setSectionViewAxis);
   const setPosition = useTwinStore((state) => state.setSectionViewPosition);
   const setFlip = useTwinStore((state) => state.setSectionViewFlip);
-  const fallbackBounds = [...BLANKET_GEOMETRY_ADAPTER.sourceBoundsMm.min, ...BLANKET_GEOMETRY_ADAPTER.sourceBoundsMm.max];
-  const bounds = geometryBounds?.length === 6 ? geometryBounds : fallbackBounds;
+  const fallbackBounds = [
+    BLANKET_GEOMETRY_ADAPTER.sourceBoundsMm.min[0], BLANKET_GEOMETRY_ADAPTER.sourceBoundsMm.max[0],
+    BLANKET_GEOMETRY_ADAPTER.sourceBoundsMm.min[1], BLANKET_GEOMETRY_ADAPTER.sourceBoundsMm.max[1],
+    BLANKET_GEOMETRY_ADAPTER.sourceBoundsMm.min[2], BLANKET_GEOMETRY_ADAPTER.sourceBoundsMm.max[2],
+  ];
+  const bounds = viewScale === "module" ? MODULE_LAYOUT_V1.boundsMm : geometryBounds?.length === 6 ? geometryBounds : fallbackBounds;
   const axisIndex = axis === "X" ? 0 : axis === "Y" ? 1 : 2;
-  const minimum = geometryBounds?.length === 6 ? bounds[axisIndex * 2] : bounds[axisIndex];
-  const maximum = geometryBounds?.length === 6 ? bounds[axisIndex * 2 + 1] : bounds[axisIndex + 3];
+  const minimum = bounds[axisIndex * 2];
+  const maximum = bounds[axisIndex * 2 + 1];
   const safeMinimum = Number.isFinite(minimum) ? minimum : fallbackBounds[axisIndex];
-  const safeMaximum = Number.isFinite(maximum) ? maximum : fallbackBounds[axisIndex + 3];
+  const safeMaximum = Number.isFinite(maximum) ? maximum : fallbackBounds[axisIndex * 2 + 1];
   const clampedPosition = Math.min(safeMaximum, Math.max(safeMinimum, positionMm));
   const step = Math.max((safeMaximum - safeMinimum) / 200, 0.1);
   const handleAxisChange = (value: string) => {
     if (!value) return;
     const nextAxis = value as "X" | "Y" | "Z";
     const nextIndex = nextAxis === "X" ? 0 : nextAxis === "Y" ? 1 : 2;
-    const nextMinimum = geometryBounds?.length === 6 ? bounds[nextIndex * 2] : bounds[nextIndex];
-    const nextMaximum = geometryBounds?.length === 6 ? bounds[nextIndex * 2 + 1] : bounds[nextIndex + 3];
+    const nextMinimum = bounds[nextIndex * 2];
+    const nextMaximum = bounds[nextIndex * 2 + 1];
     setAxis(nextAxis);
     setPosition((nextMinimum + nextMaximum) / 2);
   };
@@ -181,9 +309,55 @@ function GeometrySectionControls() {
   );
 }
 
+function NeutronAnimationControls() {
+  const enabled = useTwinStore((state) => state.neutronAnimationEnabled);
+  const density = useTwinStore((state) => state.neutronAnimationDensity);
+  const speed = useTwinStore((state) => state.neutronAnimationSpeed);
+  const plasmaEnabled = useTwinStore((state) => state.plasmaSourceEnabled);
+  const plasmaIntensity = useTwinStore((state) => state.plasmaSourceIntensity);
+  const setEnabled = useTwinStore((state) => state.setNeutronAnimationEnabled);
+  const setDensity = useTwinStore((state) => state.setNeutronAnimationDensity);
+  const setSpeed = useTwinStore((state) => state.setNeutronAnimationSpeed);
+  const setPlasmaEnabled = useTwinStore((state) => state.setPlasmaSourceEnabled);
+  const setPlasmaIntensity = useTwinStore((state) => state.setPlasmaSourceIntensity);
+  return (
+    <div className="panel-section display-controls neutron-animation-controls" data-testid="neutron-animation-controls">
+      <div className="section-label">PRESENTATION OVERLAY</div>
+      <label className="switch-row" data-testid="neutron-animation-status" data-enabled={enabled}>
+        <span><strong>Neutron Animation</strong><small>{enabled ? "Incoming overlay active" : "Incoming overlay off"}</small></span>
+        <input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} aria-label="Neutron Animation On / Off" data-testid="neutron-animation-toggle" />
+        <i />
+      </label>
+      <label className="opacity-control">
+        <span><strong>Density</strong><output data-testid="neutron-animation-density-value">{density} particles</output></span>
+        <input type="range" min="12" max="180" step="12" value={density} onChange={(event) => setDensity(Number(event.target.value))} aria-label="Neutron animation density" data-testid="neutron-animation-density" />
+      </label>
+      <label className="opacity-control">
+        <span><strong>Speed</strong><output data-testid="neutron-animation-speed-value">{speed.toFixed(2)}×</output></span>
+        <input type="range" min="0.25" max="2.5" step="0.25" value={speed} onChange={(event) => setSpeed(Number(event.target.value))} aria-label="Neutron animation speed" data-testid="neutron-animation-speed" />
+      </label>
+      <label className="switch-row" data-testid="plasma-source-status" data-enabled={plasmaEnabled}>
+        <span><strong>Plasma Source</strong><small>{plasmaEnabled ? "Source glow active" : "Source glow off"}</small></span>
+        <input type="checkbox" checked={plasmaEnabled} onChange={(event) => setPlasmaEnabled(event.target.checked)} aria-label="Plasma Source On / Off" data-testid="plasma-source-toggle" />
+        <i />
+      </label>
+      <label className="opacity-control">
+        <span><strong>Plasma Intensity</strong><output data-testid="plasma-intensity-value">{plasmaIntensity.toFixed(2)}</output></span>
+        <input type="range" min="0.1" max="1.5" step="0.1" value={plasmaIntensity} onChange={(event) => setPlasmaIntensity(Number(event.target.value))} aria-label="Plasma intensity" data-testid="plasma-intensity" />
+      </label>
+      <p className="control-help">Decorative neutron animation · presentation overlay · not a particle-transport simulation.</p>
+      <p className="control-help">Decorative plasma source · presentation-only source glow · not a plasma simulation.</p>
+    </div>
+  );
+}
+
 function ScientificDisplayControls() {
   const opacity = useTwinStore((state) => state.scientificSliceOpacity);
   const setOpacity = useTwinStore((state) => state.setAllScientificSliceOpacity);
+  const fieldId = useTwinStore((state) => state.activeFieldId);
+  const scientificField = useTwinStore((state) => state.scientificField);
+  const useLogScale = useTwinStore((state) => state.useLogScale);
+  const scientificDisplayRangeMode = useTwinStore((state) => state.scientificDisplayRanges[fieldId].mode);
   return (
     <div className="panel-section display-controls" data-testid="scientific-display-controls">
       <div className="section-label">SCIENTIFIC DISPLAY</div>
@@ -200,7 +374,90 @@ function ScientificDisplayControls() {
           onChange={(event) => setOpacity(Number(event.target.value) / 100)}
         />
       </label>
+      {scientificField && <ScientificRangeControls key={`${fieldId}-${useLogScale}-${scientificDisplayRangeMode}`} fieldId={fieldId} useLogScale={useLogScale} field={scientificField.manifest.fields[fieldId]} />}
       <p className="control-help">Visualization only; raw MCNP values and probe data are unchanged.</p>
+    </div>
+  );
+}
+
+function ScientificRangeControls({
+  fieldId,
+  useLogScale,
+  field,
+}: {
+  fieldId: ScientificFieldId;
+  useLogScale: boolean;
+  field: ScientificFieldRecord;
+}) {
+  const rangeState = useTwinStore((state) => state.scientificDisplayRanges[fieldId]);
+  const setMode = useTwinStore((state) => state.setScientificDisplayRangeMode);
+  const setValues = useTwinStore((state) => state.setScientificDisplayRangeValues);
+  const reset = useTwinStore((state) => state.resetScientificDisplayRange);
+  const autoRange = autoDisplayRange(field, useLogScale ? "log" : "linear");
+  const activeRange = resolveDisplayRange(field, useLogScale ? "log" : "linear", rangeState);
+  const [minimumText, setMinimumText] = useState(String(rangeState.minimum ?? autoRange[0]));
+  const [maximumText, setMaximumText] = useState(String(rangeState.maximum ?? autoRange[1]));
+  const [validationMessage, setValidationMessage] = useState("");
+
+  const applyDraft = (nextMinimumText: string, nextMaximumText: string) => {
+    const minimum = Number(nextMinimumText);
+    const maximum = Number(nextMaximumText);
+    const next = { mode: "manual" as const, minimum, maximum };
+    if (nextMinimumText.trim() === "" || nextMaximumText.trim() === "") {
+      setValidationMessage("Min and Max are required.");
+      return;
+    }
+    if (!Number.isFinite(minimum) || !Number.isFinite(maximum) || maximum <= minimum) {
+      setValidationMessage("Max must be greater than Min.");
+      return;
+    }
+    if (useLogScale && minimum <= 0) {
+      setValidationMessage("Logarithmic Min must be greater than zero.");
+      return;
+    }
+    if (!isValidDisplayRange(next, useLogScale ? "log" : "linear")) return;
+    setValidationMessage("");
+    setValues(fieldId, minimum, maximum);
+  };
+
+  return (
+    <div className="scientific-range-controls" data-testid="scientific-range-controls">
+      <div className="section-label">RANGE</div>
+      <ToggleGroup type="single" value={rangeState.mode} onValueChange={(value) => value && setMode(fieldId, value as "auto" | "manual")} className="segmented" data-testid="scientific-range-mode">
+        <ToggleGroupItem value="auto" data-testid="scientific-range-auto">Auto</ToggleGroupItem>
+        <ToggleGroupItem value="manual" data-testid="scientific-range-manual">Manual</ToggleGroupItem>
+      </ToggleGroup>
+      {rangeState.mode === "manual" && (
+        <>
+          <label className="opacity-control scientific-numeric-control">
+            <span><strong>Min</strong><small>{field.display_units}</small></span>
+            <input type="number" value={minimumText} step="any" aria-label="Scientific display minimum" data-testid="scientific-range-min" onChange={(event) => { setMinimumText(event.target.value); applyDraft(event.target.value, maximumText); }} />
+          </label>
+          <label className="opacity-control scientific-numeric-control">
+            <span><strong>Max</strong><small>{field.display_units}</small></span>
+            <input type="number" value={maximumText} step="any" aria-label="Scientific display maximum" data-testid="scientific-range-max" onChange={(event) => { setMaximumText(event.target.value); applyDraft(minimumText, event.target.value); }} />
+          </label>
+          {validationMessage && <p className="control-error" data-testid="scientific-range-error">{validationMessage}</p>}
+          <Button variant="outline" size="sm" onClick={() => reset(fieldId)} data-testid="scientific-range-reset">Reset to data range</Button>
+          <small data-testid="scientific-range-applied">Applied: {activeRange[0].toExponential(3)} – {activeRange[1].toExponential(3)} {field.display_units}</small>
+        </>
+      )}
+    </div>
+  );
+}
+
+function defaultIsoValue(range: readonly [number, number], log: boolean) {
+  if (log && range[0] > 0) return Math.sqrt(range[0] * range[1]);
+  return range[0] + (range[1] - range[0]) / 2;
+}
+
+function ModuleScientificNotice() {
+  return (
+    <div className="panel-section module-scientific-notice" data-testid="module-scientific-notice">
+      <div className="section-label">SCIENTIFIC DISPLAY</div>
+      <Badge tone="cyan">Tiled preview</Badge>
+      <p>Tiled reference field</p>
+      <small>Single-cell reference MCNP field · Reference case: 107-E · repeated across module cells for visualization · not a module-scale MCNP simulation. No neighboring-cell neutronics coupling is modeled.</small>
     </div>
   );
 }
@@ -227,6 +484,7 @@ function ScientificSliceManager({
   onOpacity: (id: string, opacity: number) => void;
 }) {
   const scientificField = useTwinStore((state) => state.scientificField);
+  const viewScale = useTwinStore((state) => state.viewScale);
   return (
     <div className="panel-section scientific-slice-manager" data-testid="scientific-slice-manager">
       <div className="slice-manager-heading">
@@ -239,14 +497,16 @@ function ScientificSliceManager({
         </Button>
       </div>
       {slices.map((slice, index) => {
-        const bounds = scientificField ? axisBoundaries(scientificField.manifest, slice.axis) : [0, 921];
+        const bounds = scientificField ? (viewScale === "module" ? moduleAxisBounds(MODULE_LAYOUT_V1, slice.axis) : axisBoundaries(scientificField.manifest, slice.axis)) : [0, 921];
         const minimum = bounds[0];
         const maximum = bounds.at(-1)!;
+        const intersectedCellCount = viewScale === "module" ? moduleCellsIntersectingSlice(MODULE_LAYOUT_V1, slice.axis, slice.requestedPositionMm).length : null;
         return (
           <div className={`scientific-slice-row ${activeSliceId === slice.id ? "is-active" : ""}`} key={slice.id} data-testid={`scientific-slice-row-${slice.id}`}>
             <div className="scientific-slice-row-heading">
               <button type="button" className="scientific-slice-select" onClick={() => onSelect(slice.id)} aria-pressed={activeSliceId === slice.id} data-testid={`select-scientific-slice-${slice.id}`}>
                 <strong>Slice {index + 1}</strong>
+                <small>{viewScale === "module" ? `${slice.axis} · ${slice.requestedPositionMm.toFixed(1)} mm · ${intersectedCellCount} cells` : `${slice.axis} · ${slice.centerMm.toFixed(1)} mm`}</small>
                 <span>{slice.axis} · {slice.lowerBoundMm.toFixed(1)}–{slice.upperBoundMm.toFixed(1)} mm</span>
               </button>
               <label className="slice-visibility-control">
@@ -270,6 +530,7 @@ function ScientificSliceManager({
               onChange={(value) => onPosition(slice.id, value)}
               testId={`scientific-slice-position-${slice.id}`}
               unit="mm"
+              editable
             />
             <label className="opacity-control slice-opacity-control">
               <span><strong>Opacity</strong><output>{Math.round(slice.opacity * 100)}%</output></span>
@@ -403,6 +664,8 @@ function NeutronicsControls() {
   const activeSlice = slices.find((slice) => slice.id === activeSliceId) ?? slices[0] ?? null;
   const axis = activeSlice?.axis ?? "Z";
   const log = useTwinStore((state) => state.useLogScale);
+  const displayRangeState = useTwinStore((state) => state.scientificDisplayRanges[fieldId]);
+  const isoValuesByField = useTwinStore((state) => state.isoValuesByField);
   const setField = useTwinStore((state) => state.setActiveField);
   const setMode = useTwinStore((state) => state.setVisualizationMode);
   const addSlice = useTwinStore((state) => state.addScientificSlice);
@@ -410,9 +673,11 @@ function NeutronicsControls() {
   const selectSlice = useTwinStore((state) => state.selectScientificSlice);
   const setSliceAxis = useTwinStore((state) => state.setScientificSliceAxis);
   const setSlicePosition = useTwinStore((state) => state.setScientificSlicePosition);
+  const scheduleSlicePosition = useRafScientificPosition(setSlicePosition);
   const setSliceVisible = useTwinStore((state) => state.setScientificSliceVisible);
   const setSliceOpacity = useTwinStore((state) => state.setScientificSliceOpacity);
   const setLog = useTwinStore((state) => state.setUseLogScale);
+  const setIsoValue = useTwinStore((state) => state.setIsoValue);
   const scientificStatus = useTwinStore((state) => state.scientificFieldStatus);
   const scientificField = useTwinStore((state) => state.scientificField);
   const scientificError = useTwinStore((state) => state.scientificFieldError);
@@ -425,16 +690,26 @@ function NeutronicsControls() {
   const activeDisplayName = "display_name" in active ? active.display_name : active.displayName;
   const activeCategory = "quantity_type" in active ? active.quantity_type : active.category;
   const activeUnits = "display_units" in active ? active.display_units : active.units;
-  const currentBoundaries = scientificField ? axisBoundaries(scientificField.manifest, axis) : [0, 921];
+  const viewScale = useTwinStore((state) => state.viewScale);
+  const selectedCellId = useTwinStore((state) => state.selectedCellId);
+  const selectedCell = MODULE_LAYOUT_V1.cells.find((cell) => cell.cellId === selectedCellId) ?? null;
+  const currentBoundaries = scientificField ? (viewScale === "module" ? moduleAxisBounds(MODULE_LAYOUT_V1, axis) : axisBoundaries(scientificField.manifest, axis)) : [0, 921];
   const layerMetadata = activeSlice;
-  const sliceRange = scientificField && layerMetadata ? scientificField.manifest.fields[fieldId].slice_ranges[axis][layerMetadata.layerIndex] : null;
+  const sliceRange = scientificField && layerMetadata && viewScale === "single-cell" ? scientificField.manifest.fields[fieldId].slice_ranges[axis][layerMetadata.layerIndex] : null;
   const statusLabel = scientificStatus === "ready"
     ? "Reference MCNP field"
     : scientificStatus === "error"
       ? "Scientific asset unavailable"
       : scientificStatus.replaceAll("-", " ");
   const displayScale = log ? "Log" : "Linear";
-  const logDisabled = !scientificField || !scientificField.manifest.fields[fieldId].log_scale_supported;
+  const logDisabled = !scientificField
+    || !scientificField.manifest.fields[fieldId].log_scale_supported
+    || (displayRangeState.mode === "manual" && !isValidDisplayRange(displayRangeState, "log"));
+  const activeDisplayRange = scientificField
+    ? resolveDisplayRange(scientificField.manifest.fields[fieldId], log ? "log" : "linear", displayRangeState)
+    : [0, 1] as [number, number];
+  const isoValue = isoValuesByField[fieldId] ?? defaultIsoValue(activeDisplayRange, log);
+  const isoStep = Math.max((activeDisplayRange[1] - activeDisplayRange[0]) / 200, Number.EPSILON);
   const probeLayerCenter = () => {
     if (!scientificField || !activeSlice) return;
     const x = axisBoundaries(scientificField.manifest, "X");
@@ -445,12 +720,25 @@ function NeutronicsControls() {
       (y[0] + y[y.length - 1]) / 2,
       (z[0] + z[z.length - 1]) / 2,
     ];
-    point[activeSlice.axis === "X" ? 0 : activeSlice.axis === "Y" ? 1 : 2] = activeSlice.centerMm;
-    void probeVoxel(activeSlice.id, point);
+    const probeCell = viewScale === "module"
+      ? selectedCell ?? moduleCellsIntersectingSlice(MODULE_LAYOUT_V1, activeSlice.axis, activeSlice.requestedPositionMm)[0] ?? null
+      : null;
+    const translation = probeCell ? moduleCellTranslationMm(probeCell) : [0, 0, 0] as [number, number, number];
+    const axisIndex = activeSlice.axis === "X" ? 0 : activeSlice.axis === "Y" ? 1 : 2;
+    point[axisIndex] = activeSlice.requestedPositionMm - translation[axisIndex];
+    void probeVoxel(activeSlice.id, point, probeCell?.cellId, point[axisIndex]);
   };
 
   return (
     <>
+      {viewScale === "module" && selectedCell && (
+        <div className="panel-section module-reference-provenance" data-testid="module-reference-provenance">
+          <div className="section-label">SELECTED-CELL REFERENCE FIELD</div>
+          <Badge tone="cyan">Reference only</Badge>
+          <p><strong>Single-cell reference MCNP field</strong></p>
+          <small>Reference case: 107-E · repeated across module cells for visualization · not a module-scale simulation. Reference MCNP field remains fixed to case 107-E and may not correspond to the currently applied geometry.</small>
+        </div>
+      )}
       <div className="panel-section panel-section-first">
         <label className="section-label" htmlFor="field-selector">ACTIVE FIELD</label>
         <select
@@ -476,9 +764,21 @@ function NeutronicsControls() {
         <div className="section-label">VISUALIZATION MODE</div>
         <ToggleGroup type="single" value={mode} onValueChange={(value) => value && setMode(value as VisualizationMode)} className="segmented" data-testid="visualization-mode">
           {(["Off", "Slice"] as VisualizationMode[]).map((item) => <ToggleGroupItem key={item} value={item} data-testid={`mode-${item.toLowerCase()}`}>{item}</ToggleGroupItem>)}
-          <ToggleGroupItem value="Iso-surface" data-testid="mode-iso-surface" disabled title="Unavailable in this milestone">Iso</ToggleGroupItem>
+          <ToggleGroupItem value="Iso-surface" data-testid="mode-iso-surface">Iso</ToggleGroupItem>
         </ToggleGroup>
       </div>
+      {mode === "Iso-surface" && scientificField && (
+        <div className="panel-section iso-controls" data-testid="iso-controls">
+          <div className="section-label">ISO VALUE</div>
+          <label className="opacity-control scientific-numeric-control">
+            <span><strong>Iso Value</strong><small>{activeUnits}</small></span>
+            <input type="number" value={isoValue} step="any" min={activeDisplayRange[0]} max={activeDisplayRange[1]} aria-label="Iso Value" data-testid="iso-value-input" onChange={(event) => setIsoValue(fieldId, Number(event.target.value))} />
+          </label>
+          <input type="range" min={activeDisplayRange[0]} max={activeDisplayRange[1]} step={isoStep} value={isoValue} aria-label="Iso Value slider" data-testid="iso-value-slider" onChange={(event) => setIsoValue(fieldId, Number(event.target.value))} />
+          <div className="range-labels"><span>{activeDisplayRange[0].toExponential(2)}</span><span>{activeDisplayRange[1].toExponential(2)}</span></div>
+          <p className="control-help">Interpolated visualization geometry derived from the reference FMESH field; raw MCNP values are unchanged.</p>
+        </div>
+      )}
       <div className="panel-section">
         <div className="section-label">SLICE AXIS</div>
         <ToggleGroup type="single" value={axis} onValueChange={(value) => value && activeSlice && setSliceAxis(activeSlice.id, value as SliceAxis)} className="segmented" data-testid="slice-axis">
@@ -490,9 +790,10 @@ function NeutronicsControls() {
           min={currentBoundaries[0]}
           max={currentBoundaries.at(-1)!}
           step={1}
-          onChange={(value) => activeSlice && setSlicePosition(activeSlice.id, value)}
+          onChange={(value) => activeSlice && scheduleSlicePosition(activeSlice.id, value)}
           testId="slice-position"
           unit="mm"
+          editable
         />
       </div>
       <ScientificSliceManager
@@ -502,7 +803,7 @@ function NeutronicsControls() {
         onRemove={removeSlice}
         onSelect={selectSlice}
         onAxis={setSliceAxis}
-        onPosition={setSlicePosition}
+        onPosition={scheduleSlicePosition}
         onVisible={setSliceVisible}
         onOpacity={setSliceOpacity}
       />
@@ -512,8 +813,8 @@ function NeutronicsControls() {
         <i />
       </label>
       <MetricRow label="Display state" value={`${mode} · ${slices.filter((slice) => slice.visible).length}/${slices.length} slices · ${displayScale}`} />
-      <MetricRow label={`Containing ${axis} layer`} value={layerMetadata ? `${layerMetadata.lowerBoundMm.toFixed(1)} – ${layerMetadata.upperBoundMm.toFixed(1)}` : "Unavailable"} unit={layerMetadata ? "mm" : undefined} />
-      <MetricRow label="Rendered at center" value={layerMetadata ? layerMetadata.centerMm.toFixed(1) : "Unavailable"} unit={layerMetadata ? "mm" : undefined} />
+      <MetricRow label={viewScale === "module" ? `Global ${axis} position` : `Containing ${axis} layer`} value={layerMetadata ? (viewScale === "module" ? layerMetadata.requestedPositionMm.toFixed(1) : `${layerMetadata.lowerBoundMm.toFixed(1)} – ${layerMetadata.upperBoundMm.toFixed(1)}`) : "Unavailable"} unit={layerMetadata ? "mm" : undefined} />
+      <MetricRow label={viewScale === "module" ? "Reference local layer center" : "Rendered at center"} value={layerMetadata ? layerMetadata.centerMm.toFixed(1) : "Unavailable"} unit={layerMetadata ? "mm" : undefined} />
       <MetricRow label="Global range" value={scientificField ? `${scientificField.manifest.fields[fieldId].web_range[0].toExponential(3)} – ${scientificField.manifest.fields[fieldId].web_range[1].toExponential(3)}` : "Unavailable"} unit={scientificField ? scientificField.manifest.fields[fieldId].display_units : undefined} />
       <MetricRow label="Slice range" value={sliceRange ? `${sliceRange[0].toExponential(3)} – ${sliceRange[1].toExponential(3)}` : "Unavailable"} unit={sliceRange ? scientificField?.manifest.fields[fieldId].display_units : undefined} />
       <MetricRow label="Scientific field" value={statusLabel} />
@@ -528,10 +829,13 @@ function NeutronicsControls() {
               <Button variant="ghost" size="sm" onClick={clearProbe} data-testid="clear-probe">Clear</Button>
             </div>
             <MetricRow label="Slice" value={`${probe.sliceLabel} · ${probe.sliceAxis}`} />
-            <MetricRow label="X interval" value={`${probe.boundsMm.x[0].toFixed(1)} – ${probe.boundsMm.x[1].toFixed(1)}`} unit="mm" />
-            <MetricRow label="Y interval" value={`${probe.boundsMm.y[0].toFixed(1)} – ${probe.boundsMm.y[1].toFixed(1)}`} unit="mm" />
-            <MetricRow label="Z interval" value={`${probe.boundsMm.z[0].toFixed(1)} – ${probe.boundsMm.z[1].toFixed(1)}`} unit="mm" />
-            <MetricRow label="Cell center" value={probe.centerMm.map((value) => value.toFixed(1)).join(", ")} unit="mm" />
+            {probe.moduleCell && <MetricRow label="Module cell" value={`${probe.moduleCell.cellId} · row ${probe.moduleCell.row} · column ${probe.moduleCell.column} · q ${probe.moduleCell.q} · r ${probe.moduleCell.r}`} />}
+            {probe.moduleCell && <MetricRow label="Reference case" value="107-E" />}
+            <MetricRow label={probe.moduleCell ? "Local X interval" : "X interval"} value={`${probe.boundsMm.x[0].toFixed(1)} – ${probe.boundsMm.x[1].toFixed(1)}`} unit="mm" />
+            <MetricRow label={probe.moduleCell ? "Local Y interval" : "Y interval"} value={`${probe.boundsMm.y[0].toFixed(1)} – ${probe.boundsMm.y[1].toFixed(1)}`} unit="mm" />
+            <MetricRow label={probe.moduleCell ? "Local Z interval" : "Z interval"} value={`${probe.boundsMm.z[0].toFixed(1)} – ${probe.boundsMm.z[1].toFixed(1)}`} unit="mm" />
+            <MetricRow label={probe.moduleCell ? "Local center" : "Cell center"} value={probe.centerMm.map((value) => value.toFixed(1)).join(", ")} unit="mm" />
+            {probe.moduleCenterMm && <MetricRow label="Module center" value={probe.moduleCenterMm.map((value) => value.toFixed(1)).join(", ")} unit="mm" />}
             <div className="probe-subheading">PHYSICAL QUANTITIES</div>
             {scientificField?.manifest.field_order.map((id) => (
               <MetricRow key={id} label={scientificField.manifest.fields[id].display_name} value={probe.values[id].toExponential(4)} unit={scientificField.manifest.fields[id].display_units} />
@@ -605,13 +909,17 @@ function PerformanceControls() {
 
 export function ControlPanel() {
   const section = useTwinStore((state) => state.section);
+  const viewScale = useTwinStore((state) => state.viewScale);
   const [eyebrow, title] = sectionMeta[section];
   return (
     <aside className="control-panel" data-testid="control-panel">
       <PanelHeading eyebrow={eyebrow} title={title} />
       <div className="control-scroll">
+        <ScaleModeControls />
+        <NeutronAnimationControls />
         {section === "overview" && <OverviewControls />}
         {section === "design" && <DesignControls />}
+        {section === "neutronics" && viewScale === "module" && <ModuleScientificNotice />}
         {section === "neutronics" && <NeutronicsControls />}
         {section === "thermal-hydraulics" && <ThermalControls />}
         {section === "performance" && <PerformanceControls />}

@@ -11,12 +11,21 @@ export type FieldSource = "Not connected" | "Reference MCNP Field";
 export type VisualizationMode = "Off" | "Slice" | "Iso-surface";
 export type SliceAxis = "X" | "Y" | "Z";
 export type ComponentId = "armor" | "breeder" | "multiplier" | "structure" | "coolant";
+export type ViewScale = "single-cell" | "module";
 export type ScientificFieldId =
   | "neutron_flux"
   | "photon_flux"
   | "neutron_heating"
   | "photon_heating"
   | "nuclear_heating";
+
+export type ScientificDisplayRangeMode = "auto" | "manual";
+
+export interface ScientificDisplayRangeState {
+  mode: ScientificDisplayRangeMode;
+  minimum: number | null;
+  maximum: number | null;
+}
 
 export interface DesignParameter {
   id: "pz_206" | "cz_301_radius";

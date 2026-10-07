@@ -1,4 +1,5 @@
-import type { SliceAxis } from "./twin-types";
+import type { ScientificDisplayRangeState, SliceAxis } from "./twin-types";
+import { recordScientificFieldRequest } from "./scientific-performance";
 
 export const SCIENTIFIC_FIELD_MANIFEST_URL = "/scientific/generated/reference-mcnp/manifest.json";
 
@@ -135,6 +136,14 @@ export interface ScientificVoxelProbe {
   indices: { i: number; j: number; k: number };
   boundsMm: { x: [number, number]; y: [number, number]; z: [number, number] };
   centerMm: [number, number, number];
+  moduleCell?: {
+    cellId: string;
+    row: number;
+    column: number;
+    q: number;
+    r: number;
+  };
+  moduleCenterMm?: [number, number, number];
   values: Record<ScientificFieldId, number>;
   nuclearHeatingConsistency: {
     neutronPlusPhoton: number;
@@ -152,6 +161,9 @@ export interface ScientificLoadMetrics {
   sliceUpdateMs: number | null;
   fieldSwitchMs: number | null;
   probeMs: number | null;
+  renderedSliceCount?: number;
+  renderedVertexCount?: number;
+  renderedPatchCount?: number;
 }
 
 const loadedFields = new Map<ScientificFieldId, Promise<{ values: Float32Array; metrics: { downloadMs: number; parseMs: number } }>>();
@@ -227,6 +239,7 @@ export async function loadAllScientificFieldValues(
 async function fetchFieldValues(manifest: ScientificFieldManifest, fieldId: ScientificFieldId) {
   const field = manifest.fields[fieldId];
   if (!field) throw new Error(`Scientific field '${fieldId}' is not declared in the manifest.`);
+  recordScientificFieldRequest();
   const scalarStarted = performance.now();
   const valuesUrl = new URL(field.values.url, new URL(SCIENTIFIC_FIELD_MANIFEST_URL, window.location.href));
   const valuesResponse = await fetch(valuesUrl, { cache: "no-store" });
@@ -369,6 +382,14 @@ export function buildVoxelProbe(
   sliceId = "slice-1",
   sliceAxis: SliceAxis = "Z",
   sliceLabel = sliceId,
+  moduleContext?: {
+    cellId: string;
+    row: number;
+    column: number;
+    q: number;
+    r: number;
+    translationMm: [number, number, number];
+  },
 ): ScientificVoxelProbe {
   const x = manifest.mesh.axis_boundaries_mm.x;
   const y = manifest.mesh.axis_boundaries_mm.y;
@@ -380,6 +401,11 @@ export function buildVoxelProbe(
     return [fieldId, fieldValues[linear]];
   })) as Record<ScientificFieldId, number>;
   const neutronPlusPhoton = values.neutron_heating + values.photon_heating;
+  const centerMm: [number, number, number] = [
+    (x[indices.i] + x[indices.i + 1]) / 2,
+    (y[indices.j] + y[indices.j + 1]) / 2,
+    (z[indices.k] + z[indices.k + 1]) / 2,
+  ];
   return {
     sliceId,
     sliceAxis,
@@ -390,11 +416,21 @@ export function buildVoxelProbe(
       y: [y[indices.j], y[indices.j + 1]],
       z: [z[indices.k], z[indices.k + 1]],
     },
-    centerMm: [
-      (x[indices.i] + x[indices.i + 1]) / 2,
-      (y[indices.j] + y[indices.j + 1]) / 2,
-      (z[indices.k] + z[indices.k + 1]) / 2,
-    ],
+    centerMm,
+    ...(moduleContext ? {
+      moduleCell: {
+        cellId: moduleContext.cellId,
+        row: moduleContext.row,
+        column: moduleContext.column,
+        q: moduleContext.q,
+        r: moduleContext.r,
+      },
+      moduleCenterMm: [
+        centerMm[0] + moduleContext.translationMm[0],
+        centerMm[1] + moduleContext.translationMm[1],
+        centerMm[2] + moduleContext.translationMm[2],
+      ] as [number, number, number],
+    } : {}),
     values,
     nuclearHeatingConsistency: {
       neutronPlusPhoton,
@@ -403,21 +439,38 @@ export function buildVoxelProbe(
   };
 }
 
-export function scalarDomain(field: ScientificFieldRecord, scale: ScaleMode): [number, number] {
+export function isValidDisplayRange(range: ScientificDisplayRangeState | null | undefined, scale: ScaleMode): range is ScientificDisplayRangeState & { minimum: number; maximum: number } {
+  if (!range || range.mode !== "manual" || range.minimum === null || range.maximum === null) return false;
+  if (!Number.isFinite(range.minimum) || !Number.isFinite(range.maximum) || range.maximum <= range.minimum) return false;
+  return scale !== "log" || range.minimum > 0;
+}
+
+export function autoDisplayRange(field: ScientificFieldRecord, scale: ScaleMode): [number, number] {
   if (scale === "log" && field.positive_minimum !== null && field.web_range[1] > field.positive_minimum) {
-    return [Math.log10(field.positive_minimum), Math.log10(field.web_range[1])];
+    return [field.positive_minimum, field.web_range[1]];
   }
   return field.web_range;
 }
 
-export function colorScalarValue(value: number, field: ScientificFieldRecord, scale: ScaleMode): [number, number, number] {
+export function resolveDisplayRange(field: ScientificFieldRecord, scale: ScaleMode, configured?: ScientificDisplayRangeState | null): [number, number] {
+  if (isValidDisplayRange(configured, scale)) return [configured.minimum, configured.maximum];
+  return autoDisplayRange(field, scale);
+}
+
+export function scalarDomain(field: ScientificFieldRecord, scale: ScaleMode, displayRange?: readonly [number, number]): [number, number] {
+  const range = displayRange ?? autoDisplayRange(field, scale);
+  if (scale === "log") return [Math.log10(range[0]), Math.log10(range[1])];
+  return [range[0], range[1]];
+}
+
+export function colorScalarValue(value: number, field: ScientificFieldRecord, scale: ScaleMode, displayRange?: readonly [number, number]): [number, number, number] {
   if (value <= 0) return ZERO_CELL_COLOR;
   if (scale === "log") {
     if (!field.log_scale_supported || field.positive_minimum === null) return ZERO_CELL_COLOR;
-    const domain = scalarDomain(field, "log");
+    const domain = scalarDomain(field, "log", displayRange);
     return sequentialColor(normalize(Math.log10(value), domain));
   }
-  return sequentialColor(normalize(value, field.web_range));
+  return sequentialColor(normalize(value, displayRange ?? field.web_range));
 }
 
 export const SCIENTIFIC_COLOR_GRADIENT =
@@ -434,7 +487,7 @@ const COLOR_STOPS = [
   [1, 253, 231, 37],
 ] as const;
 
-function normalize(value: number, range: [number, number]) {
+function normalize(value: number, range: readonly [number, number]) {
   return range[1] === range[0] ? 0 : Math.max(0, Math.min(1, (value - range[0]) / (range[1] - range[0])));
 }
 

@@ -3,6 +3,7 @@
 import { Box, CircleOff, Database, Layers3, ShieldCheck } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { mockTwinState } from "@/lib/mock-twin-state";
+import { MODULE_LAYOUT_V1 } from "@/lib/module-layout";
 import { useTwinStore } from "@/lib/twin-store";
 
 function Kpi({
@@ -49,6 +50,10 @@ function ProvenanceRow({
 
 export function KpiRail() {
   const section = useTwinStore((state) => state.section);
+  const viewScale = useTwinStore((state) => state.viewScale);
+  const selectedCellId = useTwinStore((state) => state.selectedCellId);
+  const appliedPz206 = useTwinStore((state) => state.appliedPz206);
+  const appliedCz301 = useTwinStore((state) => state.appliedCz301);
   const activeFieldId = useTwinStore((state) => state.activeFieldId);
   const selectedComponentId = useTwinStore((state) => state.selectedComponentId);
   const componentVisibility = useTwinStore((state) => state.componentVisibility);
@@ -66,6 +71,7 @@ export function KpiRail() {
   const selectedComponent = mockTwinState.components.find((component) => component.id === selectedComponentId)!;
   const scalarSource = prediction?.metadata.source === "simulation" ? "Simulation" : "Surrogate Prediction";
   const scalarBadge = predictionStatus === "pending" ? "Updating" : prediction ? scalarSource : "Unavailable";
+  const selectedCell = MODULE_LAYOUT_V1.cells.find((cell) => cell.cellId === selectedCellId) ?? null;
 
   return (
     <aside className="kpi-rail">
@@ -107,6 +113,27 @@ export function KpiRail() {
           />
         </label>
       </div>
+
+      {viewScale === "module" && (
+        <div className="rail-section module-selection-section" data-testid="module-selection-rail">
+          <div className="rail-title"><span>SELECTED MODULE CELL</span><Layers3 size={13} /></div>
+          {selectedCell ? (
+            <>
+              <div className="component-readout">
+                <div className="component-symbol"><Box size={18} /></div>
+                <div><strong data-testid="rail-selected-cell-id">{selectedCell.cellId}</strong><span>Row {selectedCell.row} · Column {selectedCell.column}</span></div>
+                <Badge tone="cyan">Selected</Badge>
+              </div>
+              <div className="compact-pairs">
+                <span>Center<strong>{selectedCell.positionMm.x.toFixed(1)}, {selectedCell.positionMm.y.toFixed(1)} mm</strong></span>
+                <span>Hex coords<strong>q {selectedCell.q} · r {selectedCell.r}</strong></span>
+                <span>Shared PZ206<strong>{appliedPz206.toFixed(2)} cm</strong></span>
+                <span>Shared CZ301<strong>{appliedCz301.toFixed(2)} cm</strong></span>
+              </div>
+            </>
+          ) : <p className="control-help" data-testid="rail-selected-cell-id">Select a cell in the module viewport.</p>}
+        </div>
+      )}
 
       <div className="rail-section provenance-section">
         <div className="rail-title"><span>DATA PROVENANCE</span><Database size={13} /></div>

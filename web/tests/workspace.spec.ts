@@ -150,7 +150,7 @@ test("every exposed interaction is functional, local-state, or explicitly unavai
   await expect(page.getByTestId("field-selector")).toBeEnabled();
   await expect(page.getByTestId("field-selector")).toHaveValue("nuclear_heating");
   await expect(page.getByTestId("viewport-state")).toContainText("Total Nuclear Heating");
-  await expect(page.getByTestId("mode-iso-surface")).toBeDisabled();
+  await expect(page.getByTestId("mode-iso-surface")).toBeEnabled();
   await expect(page.getByTestId("axis-x")).toBeEnabled();
   await expect(page.getByTestId("axis-y")).toBeEnabled();
   await expect(page.getByTestId("axis-z")).toBeEnabled();
@@ -623,6 +623,245 @@ test("geometry section interactions preserve page and canvas layout", async ({ p
   await sectionPosition.press("Home");
   await expectStableLayout();
   await expect(page.getByTestId("geometry-ready")).toHaveAttribute("data-camera-position", cameraBefore ?? "");
+});
+
+test("module assembly keeps single-cell defaults and exposes fixed hex layout controls", async ({ page }) => {
+  const consoleErrors: string[] = [];
+  const pageErrors: string[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") consoleErrors.push(message.text());
+  });
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await page.goto("/");
+  await expect(page.getByTestId("geometry-ready")).toBeAttached({ timeout: 15_000 });
+
+  await expect(page.getByTestId("view-scale-single-cell")).toHaveAttribute("data-state", "on");
+  await expect(page.getByTestId("geometry-ready")).toHaveAttribute("data-view-scale", "single-cell");
+  await expect(page.getByTestId("geometry-ready")).toHaveAttribute("data-module-cell-count", "1");
+  await expect(page.getByTestId("module-cell-boundaries")).toHaveAttribute("data-enabled", "false");
+  await expect(page.getByTestId("module-cell-boundaries")).toHaveAttribute("data-instance-count", "0");
+  await expect(page.getByRole("heading", { name: "Blanket Unit Cell" })).toBeVisible();
+  await expect(page.getByTestId("scientific-field-ready")).toBeAttached({ timeout: 15_000 });
+
+  const switchStarted = await page.evaluate(() => performance.now());
+  await page.getByTestId("view-scale-module").click();
+  await expect(page.getByTestId("geometry-ready")).toHaveAttribute("data-view-scale", "module");
+  const switchMs = (await page.evaluate(() => performance.now())) - switchStarted;
+  await expect(page.getByRole("heading", { name: "Blanket Module" })).toBeVisible();
+  await expect(page.getByTestId("module-layout-summary")).toContainText("28 cells");
+  await expect(page.getByTestId("geometry-ready")).toHaveAttribute("data-module-layout-id", "module-layout-v1");
+  await expect(page.getByTestId("geometry-ready")).toHaveAttribute("data-module-cell-count", "28");
+  await expect(page.getByTestId("geometry-ready")).toHaveAttribute("data-component-count", "728");
+  await expect(page.getByTestId("module-cell-boundaries")).toHaveAttribute("data-enabled", "true");
+  await expect(page.getByTestId("module-cell-boundaries")).toHaveAttribute("data-instance-count", "28");
+  await expect(page.getByTestId("module-cell-boundaries")).toHaveAttribute("data-outline-style", "front-cap-seams");
+  await expect(page.getByTestId("module-cell-boundaries")).toHaveAttribute("data-boundary-architecture", "canonical-front-cap-overlay");
+  await expect(page.getByTestId("module-cell-boundaries")).toHaveAttribute("data-front-cap-instance-count", "28");
+  await expect(page.getByTestId("module-cell-boundaries")).toHaveAttribute("data-rear-cap-instance-count", "0");
+  await expect(page.getByTestId("module-cell-boundaries")).toHaveAttribute("data-side-seam-instance-count", "0");
+  await expect(page.getByTestId("module-cell-boundaries")).toHaveAttribute("data-depth-tested", "false-overlay-front-cap");
+  await expect(page.getByTestId("module-pitch-definition")).toContainText("Fixed pitch X 108.25 mm · Y 125.00 mm");
+  await expect(page.getByTestId("scientific-field-ready")).toBeAttached({ timeout: 15_000 });
+  await expect(page.getByTestId("scientific-field-ready")).toHaveAttribute("data-reference-scope", "tiled-reference-preview");
+  expect(await page.getByTestId("module-cell-R01-C01").count()).toBe(1);
+  expect(await page.getByTestId("module-cell-R02-C05").count()).toBe(0);
+  expect(await page.getByTestId("module-cell-R04-C05").count()).toBe(0);
+  expect(await page.getByTestId("module-cell-R06-C05").count()).toBe(0);
+  expect(await page.getByTestId("module-cell-R07-C04").count()).toBe(1);
+  const occupancyTiles = page.locator("[aria-label='Module cell occupancy'] button");
+  await expect(occupancyTiles).toHaveCount(28);
+  const tilePositions = await occupancyTiles.evaluateAll((buttons) => buttons.map((button) => `${button.getAttribute("style")}`));
+  expect(new Set(tilePositions).size).toBe(28);
+  const firstRowTop = await page.getByTestId("module-cell-R01-C01").evaluate((button) => (button as HTMLElement).style.top);
+  const staggeredRowTop = await page.getByTestId("module-cell-R02-C01").evaluate((button) => (button as HTMLElement).style.top);
+  expect(firstRowTop).not.toBe(staggeredRowTop);
+
+  await page.getByTestId("module-cell-R02-C04").click();
+  await expect(page.getByTestId("selected-cell-info")).toContainText("R02-C04");
+  await expect(page.getByTestId("rail-selected-cell-id")).toHaveText("R02-C04");
+  await expect(page.getByTestId("geometry-ready")).toHaveAttribute("data-selected-cell-id", "R02-C04");
+  await expect(page.getByTestId("module-cell-boundaries")).toHaveAttribute("data-instance-count", "28");
+  await expect(page.getByTestId("module-cell-boundaries")).toHaveAttribute("data-front-cap-instance-count", "28");
+
+  await page.getByTestId("visibility-coolant").click();
+  await expect(page.getByTestId("geometry-group-coolant")).toHaveAttribute("data-visible", "false");
+  await page.getByTestId("opacity-slider-breeder").press("Home");
+  await expect(page.getByTestId("opacity-breeder")).toHaveText("15%");
+
+  await page.getByTestId("nav-neutronics").click();
+  await expect(page.getByTestId("module-reference-provenance")).toContainText("Single-cell reference MCNP field");
+  await expect(page.getByTestId("scientific-scalar-bar")).toBeVisible();
+  await expect(page.getByTestId("scientific-field-ready")).toHaveAttribute("data-rendered-patch-count", "28");
+  await page.getByTestId("view-scale-single-cell").click();
+  await expect(page.getByTestId("geometry-ready")).toHaveAttribute("data-view-scale", "single-cell");
+  await expect(page.getByTestId("scientific-field-ready")).toBeAttached({ timeout: 15_000 });
+  await expect(page.getByTestId("scientific-scalar-bar")).toBeVisible();
+
+  await page.getByTestId("view-scale-module").click();
+  await page.getByTestId("section-axis-x").click();
+  const moduleBounds = (await page.getByTestId("geometry-ready").getAttribute("data-module-bounds-mm"))!.split(",").map(Number);
+  const sectionSlider = page.getByRole("slider", { name: "Section position" });
+  expect(Number(await sectionSlider.getAttribute("aria-valuemin"))).toBeCloseTo(moduleBounds[0], 2);
+  expect(Number(await sectionSlider.getAttribute("aria-valuemax"))).toBeCloseTo(moduleBounds[1], 2);
+  await page.getByTestId("section-view-toggle").check();
+  await expect(page.getByTestId("geometry-ready")).toHaveAttribute("data-clipping-plane-count", "1");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0);
+  expect(switchMs).toBeLessThan(2_000);
+  expect(consoleErrors, `browser console errors:\n${consoleErrors.join("\n")}`).toEqual([]);
+  expect(pageErrors, `uncaught page errors:\n${pageErrors.join("\n")}`).toEqual([]);
+});
+
+test("module Apply Design updates shared geometry with one geometry request", async ({ page }) => {
+  let geometryRequests = 0;
+  await page.on("request", (request) => {
+    if (request.url().includes("/api/geometry/design") && request.method() === "POST") geometryRequests += 1;
+  });
+  await page.goto("/");
+  await expect(page.getByTestId("geometry-ready")).toBeAttached({ timeout: 15_000 });
+  geometryRequests = 0;
+  await page.getByTestId("view-scale-module").click();
+  await page.getByTestId("nav-design").click();
+  await page.getByRole("slider", { name: "PZ 206" }).press("Home");
+  await page.getByTestId("apply-design").click();
+  await expect(page.getByTestId("prediction-status")).toContainText("Predicted · PZ 2.60");
+  await expect(page.getByTestId("geometry-ready")).toHaveAttribute("data-view-scale", "module");
+  expect(geometryRequests).toBe(1);
+  await expect(page.getByTestId("geometry-ready")).toHaveAttribute("data-module-cell-count", "28");
+});
+
+test("module reference neutronics tiles global slices without duplicating the field", async ({ page }) => {
+  const consoleErrors: string[] = [];
+  const pageErrors: string[] = [];
+  const scientificPayloads: string[] = [];
+  page.on("console", (message) => { if (message.type() === "error") consoleErrors.push(message.text()); });
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  page.on("request", (request) => {
+    if (request.url().includes("/scientific/") && (request.url().endsWith(".f32") || request.url().endsWith("manifest.json"))) scientificPayloads.push(request.url());
+  });
+
+  await page.goto("/");
+  await expect(page.getByTestId("geometry-ready")).toBeAttached({ timeout: 15_000 });
+  await page.getByTestId("nav-neutronics").click();
+  await page.getByTestId("view-scale-module").click();
+  await expect(page.getByTestId("module-scientific-notice")).toContainText("Tiled reference field");
+  await expect(page.getByTestId("field-selector")).toBeVisible();
+  await expect(page.getByTestId("slice-axis")).toBeVisible();
+  await expect(page.getByTestId("scientific-slice-manager")).toBeVisible();
+  await expect(page.getByTestId("scientific-field-ready")).toBeAttached({ timeout: 15_000 });
+  await expect(page.getByTestId("scientific-field-ready")).toHaveAttribute("data-reference-scope", "tiled-reference-preview");
+  await expect(page.getByTestId("scientific-field-ready")).toHaveAttribute("data-rendered-patch-count", "28");
+  await expect(page.getByTestId("scientific-slice-slice-1")).toHaveAttribute("data-intersected-cell-count", "28");
+
+  await page.getByTestId("axis-x").click();
+  await expect(page.getByTestId("scientific-field-ready")).toHaveAttribute("data-rendered-patch-count", "4");
+  await expect(page.getByTestId("scientific-slice-slice-1")).toHaveAttribute("data-intersected-cell-count", "4");
+  await page.getByTestId("axis-y").click();
+  await expect(page.getByTestId("scientific-field-ready")).toHaveAttribute("data-rendered-patch-count", "7");
+  await expect(page.getByTestId("scientific-slice-slice-1")).toHaveAttribute("data-intersected-cell-count", "7");
+  await page.getByTestId("axis-z").click();
+  await expect(page.getByTestId("scientific-field-ready")).toHaveAttribute("data-rendered-patch-count", "28");
+
+  await page.getByTestId("module-cell-R01-C01").click();
+  await expect(page.getByTestId("module-reference-provenance")).toContainText("Single-cell reference MCNP field");
+  await expect(page.getByTestId("module-reference-provenance")).toContainText("Reference case: 107-E");
+  await expect(page.getByTestId("module-reference-provenance")).toContainText("not a module-scale simulation");
+  await expect(page.getByTestId("scientific-field-ready")).toBeAttached({ timeout: 15_000 });
+  await expect(page.getByTestId("scientific-field-ready")).toHaveAttribute("data-reference-scope", "tiled-reference-preview");
+  await expect(page.getByTestId("scientific-field-ready")).toHaveAttribute("data-reference-cell-id", "R01-C01");
+  await expect(page.getByTestId("scientific-field-ready")).toHaveAttribute("data-scientific-renderer-mounted", "true");
+  await expect(page.getByTestId("scientific-field-ready")).toHaveAttribute("data-scientific-overlay", "true");
+  await expect(page.getByTestId("scientific-field-ready")).toHaveAttribute("data-rendered-slice-count", "1");
+  expect(Number(await page.getByTestId("scientific-field-ready").getAttribute("data-rendered-vertex-count"))).toBeGreaterThan(0);
+  await expect(page.getByTestId("scientific-scalar-bar")).toContainText("case 107-E");
+  const initialGlobalPosition = await page.getByTestId("scientific-slice-slice-1").getAttribute("data-global-slice-position-mm");
+  await expect(page.getByTestId("scientific-slice-slice-1")).toHaveAttribute("data-slice-geometry-nonempty", "true");
+  expect(Number(await page.getByTestId("scientific-slice-slice-1").getAttribute("data-slice-opacity"))).toBeGreaterThan(0);
+
+  await page.getByTestId("add-scientific-slice").click();
+  await expect(page.getByTestId("scientific-field-ready")).toHaveAttribute("data-slice-count", "2");
+  const localSliceCenter = await page.getByTestId("scientific-slice-slice-1").getAttribute("data-slice-center-mm");
+  const payloadCountBeforeSwitch = scientificPayloads.length;
+  await page.getByTestId("module-cell-R05-C03").click();
+  await expect(page.getByTestId("scientific-field-ready")).toHaveAttribute("data-reference-cell-id", "R05-C03");
+  await expect(page.getByTestId("scientific-slice-slice-1")).toHaveAttribute("data-slice-center-mm", localSliceCenter!);
+  await expect(page.getByTestId("scientific-slice-slice-1")).toHaveAttribute("data-global-slice-position-mm", initialGlobalPosition!);
+  expect(scientificPayloads.length).toBe(payloadCountBeforeSwitch);
+
+  await page.getByTestId("probe-layer-center").click();
+  await expect(page.getByTestId("probe-panel")).toContainText("R05-C03");
+  await expect(page.getByTestId("probe-panel")).toContainText("Local center");
+  await expect(page.getByTestId("probe-panel")).toContainText("Module center");
+  await page.getByTestId("module-cell-R07-C04").click();
+  await expect(page.getByTestId("probe-panel")).not.toContainText("R05-C03");
+  await expect(page.getByTestId("scientific-field-ready")).toHaveAttribute("data-reference-cell-id", "R07-C04");
+
+  await expect(page.getByTestId("log-scale")).toBeVisible();
+  await page.getByTestId("log-scale").check();
+  await expect(page.getByTestId("scientific-field-ready")).toHaveAttribute("data-scale-mode", "log");
+  await expect(page.getByTestId("geometry-ready")).toHaveAttribute("data-view-scale", "module");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0);
+  expect(consoleErrors, `browser console errors:\n${consoleErrors.join("\n")}`).toEqual([]);
+  expect(pageErrors, `uncaught page errors:\n${pageErrors.join("\n")}`).toEqual([]);
+});
+
+test("neutron arrival animation is a controllable presentation overlay at both scales", async ({ page }) => {
+  const consoleErrors: string[] = [];
+  const pageErrors: string[] = [];
+  page.on("console", (message) => { if (message.type() === "error") consoleErrors.push(message.text()); });
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await page.goto("/");
+  await expect(page.getByTestId("geometry-ready")).toBeAttached({ timeout: 15_000 });
+  await expect(page.getByTestId("neutron-animation-controls")).toBeVisible();
+  await expect(page.getByTestId("plasma-source-ready")).toHaveAttribute("data-view-scale", "single-cell");
+  await expect(page.getByTestId("plasma-source-ready")).toHaveAttribute("data-object-type", "shallow-3d-box-volume");
+  expect(Number(await page.getByTestId("plasma-source-ready").getAttribute("data-depth-mm"))).toBeGreaterThan(0);
+  const singleCellSourceBounds = await page.getByTestId("plasma-source-ready").getAttribute("data-source-bounds-mm");
+  await expect(page.getByTestId("neutron-animation-status")).toHaveAttribute("data-enabled", "false");
+  await expect(page.getByTestId("neutron-animation-toggle")).not.toBeChecked();
+  await expect(page.getByTestId("plasma-source-status")).toHaveAttribute("data-enabled", "false");
+  await expect(page.getByTestId("plasma-source-toggle")).not.toBeChecked();
+  await expect(page.getByText("not a particle-transport simulation", { exact: false })).toBeVisible();
+  await expect(page.getByText("not a plasma simulation", { exact: false })).toBeVisible();
+
+  await page.getByTestId("neutron-animation-toggle").check();
+  await expect(page.getByTestId("neutron-animation-status")).toHaveAttribute("data-enabled", "true");
+  await expect(page.getByTestId("neutron-animation-toggle")).toBeChecked();
+  await page.getByTestId("neutron-animation-density").press("End");
+  await expect(page.getByTestId("neutron-animation-density-value")).toHaveText("180 particles");
+  await page.getByTestId("neutron-animation-speed").press("Home");
+  await expect(page.getByTestId("neutron-animation-speed-value")).toHaveText("0.25×");
+  await page.getByTestId("plasma-source-toggle").check();
+  await expect(page.getByTestId("plasma-source-status")).toHaveAttribute("data-enabled", "true");
+  await expect(page.getByTestId("plasma-source-toggle")).toBeChecked();
+  await expect(page.getByTestId("plasma-source-ready")).toHaveAttribute("data-enabled", "true");
+  await page.getByTestId("plasma-intensity").press("End");
+  await expect(page.getByTestId("plasma-intensity-value")).toHaveText("1.50");
+
+  await page.getByTestId("nav-neutronics").click();
+  await expect(page.getByTestId("field-selector")).toBeVisible();
+  await expect(page.getByTestId("scientific-slice-manager")).toBeVisible();
+  await page.getByTestId("section-view-toggle").check();
+  await expect(page.getByTestId("geometry-ready")).toHaveAttribute("data-clipping-plane-count", "1");
+
+  await page.getByTestId("view-scale-module").click();
+  await expect(page.getByTestId("geometry-ready")).toHaveAttribute("data-view-scale", "module");
+  await expect(page.getByTestId("plasma-source-ready")).toHaveAttribute("data-view-scale", "module");
+  await expect(page.getByTestId("plasma-source-ready")).not.toHaveAttribute("data-source-bounds-mm", singleCellSourceBounds ?? "");
+  expect(Number(await page.getByTestId("plasma-source-ready").getAttribute("data-depth-mm"))).toBeGreaterThan(0);
+  await expect(page.getByTestId("neutron-animation-toggle")).toBeChecked();
+  await expect(page.getByTestId("neutron-animation-status")).toHaveAttribute("data-enabled", "true");
+  await expect(page.getByTestId("plasma-source-toggle")).toBeChecked();
+  await expect(page.getByTestId("plasma-source-status")).toHaveAttribute("data-enabled", "true");
+  await page.getByTestId("plasma-source-toggle").uncheck();
+  await expect(page.getByTestId("plasma-source-status")).toHaveAttribute("data-enabled", "false");
+  await page.getByTestId("neutron-animation-toggle").uncheck();
+  await expect(page.getByTestId("neutron-animation-status")).toHaveAttribute("data-enabled", "false");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(0);
+  expect(consoleErrors, `browser console errors:\n${consoleErrors.join("\n")}`).toEqual([]);
+  expect(pageErrors, `uncaught page errors:\n${pageErrors.join("\n")}`).toEqual([]);
 });
 
 test("the engineering workspace remains readable and unclipped at target desktop resolutions", async ({ page }) => {
